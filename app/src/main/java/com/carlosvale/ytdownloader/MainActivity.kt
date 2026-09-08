@@ -51,6 +51,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -99,12 +100,18 @@ enum class DownloadMode(val title: String, val subtitle: String) {
     AUDIO_MP3("Só áudio · MP3", "Converte o melhor áudio para MP3")
 }
 
+data class PlaylistEntry(
+    val title: String,
+    val url: String
+)
+
 data class MediaSummary(
     val title: String,
     val uploader: String = "",
     val durationSeconds: Long? = null,
     val playlistCount: Int = 0,
-    val entries: List<String> = emptyList()
+    val entries: List<String> = emptyList(),
+    val playlistEntries: List<PlaylistEntry> = emptyList()
 )
 
 data class UiState(
@@ -115,7 +122,12 @@ data class UiState(
     val status: String = "",
     val media: MediaSummary? = null,
     val error: String? = null,
-    val customFolder: Uri? = null
+    val successMessage: String? = null,
+    val customFolder: Uri? = null,
+    val completedItems: Int = 0,
+    val totalItems: Int = 0,
+    val currentItem: Int = 0,
+    val resetToken: Int = 0
 )
 
 private data class DownloadAttempt(
@@ -129,14 +141,23 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val state: StateFlow<UiState> = _state.asStateFlow()
     private var processId: String? = null
 
+    @Volatile
+    private var cancelRequested = false
+
     fun setFolder(uri: Uri?) {
-        _state.value = _state.value.copy(customFolder = uri)
+        _state.value = _state.value.copy(customFolder = uri, successMessage = null)
+    }
+
+    fun clearSuccess() {
+        if (_state.value.successMessage != null) {
+            _state.value = _state.value.copy(successMessage = null)
+        }
     }
 
     fun analyze(url: String) {
         val cleanUrl = url.trim()
         if (!cleanUrl.startsWith("http://") && !cleanUrl.startsWith("https://")) {
-            _state.value = _state.value.copy(error = "Cole um link válido.")
+            _state.value = _state.value.copy(error = "Cole um link válido.", successMessage = null)
             return
         }
 
@@ -144,6 +165,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             _state.value = _state.value.copy(
                 analyzing = true,
                 error = null,
+                successMessage = null,
                 media = null,
                 status = "Atualizando mecanismo…"
             )
@@ -158,18 +180,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     .addOption("--flat-playlist")
                     .addOption("--skip-download")
                     .addOption("--no-warnings")
+                    .addOption("--yes-playlist")
                     .addOption("--extractor-args", "youtube:player_client=default,web_embedded,tv_downgraded")
 
                 val output = YoutubeDL.getInstance().execute(request).out.trim()
                 val json = JSONObject(output)
                 val entriesArray = json.optJSONArray("entries")
-                val entries = mutableListOf<String>()
+                val playlistEntries = mutableListOf<PlaylistEntry>()
 
                 if (entriesArray != null) {
                     for (i in 0 until entriesArray.length()) {
-                        val item = entriesArray.optJSONObject(i)
-                        val title = item?.optString("title").orEmpty()
-                        if (title.isNotBlank()) entries += title
+                        val item = entriesArray.optJSONObject(i) ?: continue
+                        val title = item.optString("title").ifBlank { "Item ${i + 1}" }
+                        val id = item.optString("id")
+                        val rawUrl = item.optString("url")
+                        val entryUrl = normalizePlaylistEntryUrl(rawUrl, id)
+                        if (entryUrl.isNotBlank()) {
+                            playlistEntries += PlaylistEntry(title = title, url = entryUrl)
+                        }
                     }
                 }
 
@@ -177,8 +205,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     title = json.optString("title", "Mídia encontrada"),
                     uploader = json.optString("uploader", json.optString("channel", "")),
                     durationSeconds = if (json.has("duration") && !json.isNull("duration")) json.optLong("duration") else null,
-                    playlistCount = entriesArray?.length() ?: 0,
-                    entries = entries.take(12)
+                    playlistCount = playlistEntries.size,
+                    entries = playlistEntries.map { it.title }.take(12),
+                    playlistEntries = playlistEntries
                 )
             }.onSuccess { media ->
                 _state.value = _state.value.copy(
@@ -202,7 +231,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (cleanUrl.isBlank()) return
 
         val app = getApplication<YTDownloaderApp>()
+        val media = _state.value.media
+        val playlistEntries = media?.playlistEntries.orEmpty()
+        val isPlaylist = playlistEntries.isNotEmpty()
+        val totalItems = if (isPlaylist) playlistEntries.size else 1
+
         viewModelScope.launch(Dispatchers.IO) {
+            cancelRequested = false
             val customTree = _state.value.customFolder
             val jobDir = if (customTree == null) {
                 File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "YT Downloader")
@@ -215,79 +250,85 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 downloading = true,
                 progress = 0f,
                 error = null,
-                status = "Atualizando mecanismo…"
+                successMessage = null,
+                status = "Atualizando mecanismo…",
+                completedItems = 0,
+                totalItems = totalItems,
+                currentItem = if (totalItems > 0) 1 else 0
             )
-
-            val attempts = listOf(
-                DownloadAttempt("rota padrão"),
-                DownloadAttempt(
-                    label = "rota alternativa",
-                    playerClients = "web_embedded,tv_downgraded"
-                ),
-                DownloadAttempt(
-                    label = "modo compatibilidade",
-                    playerClients = "web_embedded,tv_downgraded",
-                    compatibilityMode = true
-                )
-            )
-
-            var finalError: Throwable? = null
-            var succeeded = false
 
             try {
                 app.ensureEngineReady()
 
-                for ((index, attempt) in attempts.withIndex()) {
-                    if (!_state.value.downloading) break
+                var completed = 0
+                var failed = 0
+                var lastError: Throwable? = null
+                val itemNumberWidth = totalItems.toString().length.coerceAtLeast(2)
 
-                    if (index > 0) {
-                        jobDir.listFiles()?.forEach { file ->
-                            if (file.name.endsWith(".part") || file.name.endsWith(".ytdl")) file.delete()
-                        }
-                    }
+                if (isPlaylist) {
+                    for ((index, entry) in playlistEntries.withIndex()) {
+                        if (cancelRequested || !_state.value.downloading) return@launch
 
-                    _state.value = _state.value.copy(
-                        progress = 0f,
-                        status = if (index == 0) "Preparando download…" else "Tentando ${attempt.label}…"
-                    )
-
-                    val currentProcessId = UUID.randomUUID().toString()
-                    processId = currentProcessId
-
-                    val result = runCatching {
-                        val request = buildDownloadRequest(
-                            url = cleanUrl,
-                            mode = mode,
-                            outputDir = jobDir,
-                            playerClients = attempt.playerClients,
-                            compatibilityMode = attempt.compatibilityMode
+                        val itemNumber = index + 1
+                        _state.value = _state.value.copy(
+                            currentItem = itemNumber,
+                            completedItems = completed,
+                            progress = completed.toFloat() / totalItems.toFloat(),
+                            etaSeconds = 0,
+                            status = "Item $itemNumber de $totalItems • ${entry.title}"
                         )
 
-                        YoutubeDL.getInstance().execute(request, currentProcessId) { progress, eta, line ->
+                        val outputTemplate = "${itemNumber.toString().padStart(itemNumberWidth, '0')} - %(title)s.%(ext)s"
+                        val result = executeWithFallback(
+                            url = entry.url,
+                            mode = mode,
+                            outputDir = jobDir,
+                            outputTemplate = outputTemplate,
+                            completedBeforeThisItem = completed,
+                            totalItems = totalItems,
+                            itemNumber = itemNumber,
+                            itemTitle = entry.title
+                        )
+
+                        if (cancelRequested || !_state.value.downloading) return@launch
+
+                        if (result.isSuccess) {
+                            completed++
                             _state.value = _state.value.copy(
-                                progress = progress.coerceIn(0f, 100f) / 100f,
-                                etaSeconds = eta,
-                                status = if (line.isBlank()) "Baixando…" else compactStatus(line)
+                                completedItems = completed,
+                                progress = completed.toFloat() / totalItems.toFloat(),
+                                status = "$completed de $totalItems itens baixados"
+                            )
+                        } else {
+                            failed++
+                            lastError = result.exceptionOrNull()
+                            _state.value = _state.value.copy(
+                                status = "Não foi possível baixar o item $itemNumber. Continuando…"
                             )
                         }
                     }
+                } else {
+                    val result = executeWithFallback(
+                        url = cleanUrl,
+                        mode = mode,
+                        outputDir = jobDir,
+                        outputTemplate = "%(title)s.%(ext)s",
+                        completedBeforeThisItem = 0,
+                        totalItems = 1,
+                        itemNumber = 1,
+                        itemTitle = media?.title.orEmpty()
+                    )
 
-                    processId = null
+                    if (cancelRequested || !_state.value.downloading) return@launch
 
-                    if (result.isSuccess) {
-                        succeeded = true
-                        break
-                    }
-
-                    val error = result.exceptionOrNull() ?: RuntimeException("Falha no download")
-                    finalError = error
-
-                    if (!isRetryableYouTubeError(error) || index == attempts.lastIndex) {
-                        break
-                    }
+                    if (result.isFailure) throw result.exceptionOrNull() ?: RuntimeException("Falha no download")
+                    completed = 1
+                    _state.value = _state.value.copy(completedItems = 1, progress = 1f)
                 }
 
-                if (!succeeded) throw finalError ?: RuntimeException("Falha no download")
+                if (completed == 0 && failed > 0) {
+                    throw lastError ?: RuntimeException("Nenhum item da playlist pôde ser baixado")
+                }
 
                 if (customTree != null) {
                     _state.value = _state.value.copy(status = "Salvando na pasta escolhida…")
@@ -295,35 +336,138 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     jobDir.deleteRecursively()
                 }
 
-                _state.value = _state.value.copy(
-                    downloading = false,
-                    progress = 1f,
-                    status = "Download concluído",
-                    error = null
+                val message = when {
+                    isPlaylist && failed == 0 -> "Playlist concluída: $completed de $totalItems itens baixados com sucesso."
+                    isPlaylist -> "Playlist finalizada: $completed de $totalItems itens baixados. $failed item(ns) não puderam ser baixados."
+                    else -> "Download concluído com sucesso."
+                }
+
+                _state.value = UiState(
+                    successMessage = message,
+                    resetToken = _state.value.resetToken + 1
                 )
             } catch (error: Throwable) {
-                _state.value = _state.value.copy(
-                    downloading = false,
-                    error = friendlyError(error),
-                    status = ""
-                )
+                if (!cancelRequested) {
+                    _state.value = _state.value.copy(
+                        downloading = false,
+                        error = friendlyError(error),
+                        status = ""
+                    )
+                }
             } finally {
                 processId = null
+                cancelRequested = false
             }
         }
+    }
+
+    private fun executeWithFallback(
+        url: String,
+        mode: DownloadMode,
+        outputDir: File,
+        outputTemplate: String,
+        completedBeforeThisItem: Int,
+        totalItems: Int,
+        itemNumber: Int,
+        itemTitle: String
+    ): Result<Unit> {
+        val attempts = listOf(
+            DownloadAttempt("rota padrão"),
+            DownloadAttempt(
+                label = "rota alternativa",
+                playerClients = "web_embedded,tv_downgraded"
+            ),
+            DownloadAttempt(
+                label = "modo compatibilidade",
+                playerClients = "web_embedded,tv_downgraded",
+                compatibilityMode = true
+            )
+        )
+
+        var finalError: Throwable? = null
+
+        for ((attemptIndex, attempt) in attempts.withIndex()) {
+            if (cancelRequested || !_state.value.downloading) {
+                return Result.failure(RuntimeException("Download cancelado"))
+            }
+
+            if (attemptIndex > 0) {
+                outputDir.listFiles()?.forEach { file ->
+                    if (file.name.endsWith(".part") || file.name.endsWith(".ytdl")) file.delete()
+                }
+            }
+
+            _state.value = _state.value.copy(
+                status = if (attemptIndex == 0) {
+                    if (totalItems > 1) "Item $itemNumber de $totalItems • $itemTitle" else "Preparando download…"
+                } else {
+                    if (totalItems > 1) {
+                        "Item $itemNumber de $totalItems • Tentando ${attempt.label}…"
+                    } else {
+                        "Tentando ${attempt.label}…"
+                    }
+                }
+            )
+
+            val currentProcessId = UUID.randomUUID().toString()
+            processId = currentProcessId
+
+            val result = runCatching {
+                val request = buildDownloadRequest(
+                    url = url,
+                    mode = mode,
+                    outputDir = outputDir,
+                    outputTemplate = outputTemplate,
+                    playerClients = attempt.playerClients,
+                    compatibilityMode = attempt.compatibilityMode
+                )
+
+                YoutubeDL.getInstance().execute(request, currentProcessId) { itemProgress, eta, line ->
+                    val overallProgress = if (totalItems > 1) {
+                        (completedBeforeThisItem + itemProgress.coerceIn(0f, 100f) / 100f) / totalItems.toFloat()
+                    } else {
+                        itemProgress.coerceIn(0f, 100f) / 100f
+                    }
+
+                    _state.value = _state.value.copy(
+                        progress = overallProgress.coerceIn(0f, 1f),
+                        etaSeconds = eta,
+                        status = when {
+                            totalItems > 1 && line.isNotBlank() -> "Item $itemNumber de $totalItems • ${compactStatus(line)}"
+                            totalItems > 1 -> "Item $itemNumber de $totalItems • $itemTitle"
+                            line.isNotBlank() -> compactStatus(line)
+                            else -> "Baixando…"
+                        }
+                    )
+                }
+                Unit
+            }
+
+            processId = null
+
+            if (result.isSuccess) return result
+
+            val error = result.exceptionOrNull() ?: RuntimeException("Falha no download")
+            finalError = error
+            if (!isRetryableYouTubeError(error) || attemptIndex == attempts.lastIndex) break
+        }
+
+        return Result.failure(finalError ?: RuntimeException("Falha no download"))
     }
 
     private fun buildDownloadRequest(
         url: String,
         mode: DownloadMode,
         outputDir: File,
+        outputTemplate: String,
         playerClients: String?,
         compatibilityMode: Boolean
     ): YoutubeDLRequest {
         val request = YoutubeDLRequest(url)
-            .addOption("-o", File(outputDir, "%(title)s.%(ext)s").absolutePath)
+            .addOption("-o", File(outputDir, outputTemplate).absolutePath)
             .addOption("--no-warnings")
             .addOption("--newline")
+            .addOption("--no-playlist")
             .addOption("--retries", "3")
             .addOption("--fragment-retries", "3")
 
@@ -389,12 +533,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun cancel() {
+        cancelRequested = true
         processId?.let { YoutubeDL.getInstance().destroyProcessById(it) }
         processId = null
         _state.value = _state.value.copy(
             downloading = false,
-            status = "Download cancelado"
+            status = "Download cancelado",
+            error = null
         )
+    }
+
+    private fun normalizePlaylistEntryUrl(rawUrl: String, id: String): String {
+        val candidate = rawUrl.trim()
+        return when {
+            candidate.startsWith("http://") || candidate.startsWith("https://") -> candidate
+            id.isNotBlank() -> "https://www.youtube.com/watch?v=$id"
+            candidate.matches(Regex("^[A-Za-z0-9_-]{11}$")) -> "https://www.youtube.com/watch?v=$candidate"
+            else -> ""
+        }
     }
 
     private fun isRetryableYouTubeError(error: Throwable): Boolean {
@@ -410,7 +566,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val raw = error.message.orEmpty()
         return when {
             raw.contains("403", ignoreCase = true) || raw.contains("Forbidden", ignoreCase = true) ->
-                "O YouTube recusou as rotas disponíveis para este vídeo (erro 403). O app já tentou rotas alternativas automaticamente. Tente novamente em alguns instantes ou teste outro vídeo."
+                "O YouTube recusou as rotas disponíveis (erro 403). O app já tentou rotas alternativas automaticamente. Tente novamente em alguns instantes."
 
             raw.contains("Requested format is not available", ignoreCase = true) ->
                 "Essa qualidade não está disponível por uma rota compatível. Tente outra opção de formato."
@@ -458,6 +614,13 @@ fun DownloaderScreen(initialUrl: String, vm: MainViewModel = viewModel()) {
     var mode by remember { mutableStateOf(DownloadMode.MP4_AV) }
     val context = androidx.compose.ui.platform.LocalContext.current
 
+    LaunchedEffect(state.resetToken) {
+        if (state.resetToken > 0) {
+            url = ""
+            mode = DownloadMode.MP4_AV
+        }
+    }
+
     val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
             runCatching {
@@ -499,13 +662,21 @@ fun DownloaderScreen(initialUrl: String, vm: MainViewModel = viewModel()) {
             item {
                 OutlinedTextField(
                     value = url,
-                    onValueChange = { url = it },
+                    onValueChange = {
+                        url = it
+                        vm.clearSuccess()
+                    },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                     label = { Text("Link do vídeo ou playlist") },
                     leadingIcon = { Icon(Icons.Rounded.Link, null) },
                     trailingIcon = {
-                        IconButton(onClick = { clipboard.getText()?.text?.let { url = it } }) {
+                        IconButton(onClick = {
+                            clipboard.getText()?.text?.let {
+                                url = it
+                                vm.clearSuccess()
+                            }
+                        }) {
                             Icon(Icons.Rounded.ContentPaste, "Colar")
                         }
                     },
@@ -527,6 +698,22 @@ fun DownloaderScreen(initialUrl: String, vm: MainViewModel = viewModel()) {
                         Icon(Icons.Rounded.Search, null)
                         Spacer(Modifier.padding(4.dp))
                         Text("Analisar link")
+                    }
+                }
+            }
+
+            state.successMessage?.let { message ->
+                item {
+                    Surface(
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        shape = RoundedCornerShape(16.dp)
+                    ) {
+                        Text(
+                            message,
+                            modifier = Modifier.padding(14.dp),
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            fontWeight = FontWeight.SemiBold
+                        )
                     }
                 }
             }
@@ -674,7 +861,7 @@ private fun MediaCard(media: MediaSummary) {
 
             val details = buildList {
                 media.durationSeconds?.let { add(formatDuration(it)) }
-                if (media.playlistCount > 0) add("${media.playlistCount} vídeos")
+                if (media.playlistCount > 0) add("${media.playlistCount} itens")
             }.joinToString(" • ")
 
             if (details.isNotBlank()) {
@@ -728,7 +915,11 @@ private fun DownloadProgress(state: UiState, onCancel: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Baixando", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                Text(
+                    if (state.totalItems > 1) "Baixando playlist" else "Baixando",
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f)
+                )
                 Text("${(state.progress * 100).toInt()}%", fontWeight = FontWeight.Bold)
             }
 
@@ -737,6 +928,14 @@ private fun DownloadProgress(state: UiState, onCancel: () -> Unit) {
                 modifier = Modifier.fillMaxWidth()
             )
 
+            if (state.totalItems > 1) {
+                Text(
+                    "${state.completedItems} de ${state.totalItems} itens concluídos",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+
             Text(
                 state.status,
                 style = MaterialTheme.typography.bodySmall,
@@ -744,7 +943,7 @@ private fun DownloadProgress(state: UiState, onCancel: () -> Unit) {
                 overflow = TextOverflow.Ellipsis
             )
 
-            if (state.etaSeconds > 0) {
+            if (state.etaSeconds > 0 && state.totalItems <= 1) {
                 Text(
                     "Tempo estimado: ${formatDuration(state.etaSeconds)}",
                     style = MaterialTheme.typography.labelSmall
