@@ -8,10 +8,11 @@
     <application
         android:name=".YTDownloaderApp"
         android:allowBackup="true"
-        android:icon="@drawable/ic_app"
-        android:label="BaixaMídia"
+        android:icon="@drawable/getmuvi_icon"
+        android:roundIcon="@drawable/getmuvi_icon"
+        android:label="GetMuvi"
         android:supportsRtl="true"
-        android:theme="@style/Theme.YTDownloader">
+        android:theme="@style/Theme.GetMuvi">
         <activity
             android:name=".MainActivity"
             android:exported="true">
