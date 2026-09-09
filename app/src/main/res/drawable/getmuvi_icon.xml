@@ -1,31 +1,80 @@
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
 
+    <!-- Fundo arredondado: elimina os cantos vivos do ícone anterior. -->
     <path
-        android:fillColor="#07122E"
-        android:pathData="M0,0h108v108h-108z" />
+        android:pathData="M14,2 H94 C100.6,2 106,7.4 106,14 V94 C106,100.6 100.6,106 94,106 H14 C7.4,106 2,100.6 2,94 V14 C2,7.4 7.4,2 14,2 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="8"
+                android:startY="8"
+                android:endX="102"
+                android:endY="102"
+                android:startColor="#06265A"
+                android:centerColor="#071A46"
+                android:endColor="#17105B"
+                android:type="linear" />
+        </aapt:attr>
+    </path>
 
+    <!-- Ondas inferiores inspiradas na arte aprovada. -->
     <path
-        android:fillColor="#18D9D0"
-        android:pathData="M25,17 C20,17 17,22 17,29 L17,79 C17,86 22,91 29,91 C31,91 34,90 37,88 L86,60 C92,57 92,50 86,47 L37,19 C33,17 29,17 25,17 Z" />
-
+        android:fillColor="#117CFF"
+        android:fillAlpha="0.82"
+        android:pathData="M2,78 C20,91 39,96 58,96 C76,96 91,90 106,79 V94 C106,100.6 100.6,106 94,106 H14 C7.4,106 2,100.6 2,94 Z" />
     <path
-        android:fillColor="#287BFF"
-        android:pathData="M31,25 C27,25 25,29 25,34 L25,74 C25,80 29,83 34,80 L76,57 C81,54 81,50 76,47 L34,24 C33,24 32,25 31,25 Z" />
-
+        android:fillColor="#38E8E2"
+        android:fillAlpha="0.72"
+        android:pathData="M2,87 C21,100 43,102 61,100 C79,99 94,94 106,86 V94 C106,100.6 100.6,106 94,106 H14 C7.4,106 2,100.6 2,94 Z" />
     <path
-        android:fillColor="#8B5CFF"
-        android:pathData="M62,37 C70,40 79,45 87,50 C92,53 92,58 87,61 L48,83 C43,86 38,85 35,82 C51,78 64,70 73,60 C80,52 76,43 62,37 Z" />
+        android:fillColor="#7C46FF"
+        android:fillAlpha="0.76"
+        android:pathData="M57,98 C75,97 92,91 106,81 V94 C106,100.6 100.6,106 94,106 H57 Z" />
 
+    <!-- Camada principal ciano/azul, toda construída com curvas suaves. -->
+    <path
+        android:pathData="M34,17 C28,16 23,21 23,28 V78 C23,86 29,91 37,88 L84,61 C91,57 91,51 84,47 L38,20 C36,18.5 35,17.5 34,17 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="25"
+                android:startY="19"
+                android:endX="84"
+                android:endY="83"
+                android:startColor="#48F3E7"
+                android:centerColor="#0D98FF"
+                android:endColor="#2860FF"
+                android:type="linear" />
+        </aapt:attr>
+    </path>
+
+    <!-- Camada violeta/magenta posterior. -->
+    <path
+        android:pathData="M58,31 C70,35 82,42 90,48 C96,52 96,58 90,62 L51,84 C45,88 38,86 34,81 C49,77 64,69 75,58 C83,50 77,40 58,31 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="54"
+                android:startY="34"
+                android:endX="91"
+                android:endY="69"
+                android:startColor="#506BFF"
+                android:centerColor="#8C48FF"
+                android:endColor="#F05CFF"
+                android:type="linear" />
+        </aapt:attr>
+    </path>
+
+    <!-- Nota musical branca, com geometria suave e equilibrada. -->
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M43,36 L43,68 C40,66 37,65 34,65 C27,65 22,70 22,77 C22,84 27,89 34,89 C42,89 49,83 49,75 L49,48 L61,45 L61,58 L67,58 L67,42 C67,38 64,35 60,36 L43,40 Z" />
+        android:pathData="M45,35 C45,31.5 47,29.5 50,29 L72,25 C76,24.2 79,27 79,30.5 V49 H72 V36 L53,39.5 V69 C53,79.5 46,87 37,87 C28.5,87 22,81.2 22,73.5 C22,65.5 28.2,59.5 36.5,59.5 C39.5,59.5 42.5,60.4 45,62 Z" />
 
+    <!-- Seta vertical reta e centralizada. -->
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M65,52 L73,52 L73,66 L82,66 L69,80 L56,66 L65,66 Z" />
+        android:pathData="M69,48.5 C69,46.5 70.5,45 72.5,45 H76.5 C78.5,45 80,46.5 80,48.5 V65 H86 C88.2,65 89.2,67.4 87.6,69 L77,80 C75.6,81.5 73.4,81.5 72,80 L61.2,69 C59.6,67.4 60.7,65 62.8,65 H69 Z" />
 </vector>
