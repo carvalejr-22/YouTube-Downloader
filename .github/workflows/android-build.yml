@@ -2,7 +2,7 @@ name: Build GetMuvi APK
 
 on:
   push:
-    branches: [ main, getmuvi-0.3.0-test ]
+    branches: [ main, getmuvi-0.3.2-opt ]
   workflow_dispatch:
 
 permissions:
@@ -17,17 +17,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Apply approved GetMuvi branding
-        run: python3 scripts/apply_approved_branding.py
+      - name: Apply GetMuvi 0.3.2 optimizations
+        run: python3 scripts/apply_0_3_2_optimizations.py
 
-      - name: Persist branding source update
+      - name: Persist optimized source
         shell: bash
         run: |
           if ! git diff --quiet -- app/src/main/java/com/carlosvale/ytdownloader/MainActivity.kt; then
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add app/src/main/java/com/carlosvale/ytdownloader/MainActivity.kt
-            git commit -m "GetMuvi 0.3.1: aplicar wordmark e arte aprovados [skip ci]"
+            git commit -m "GetMuvi 0.3.2: otimizar fluxo e botão de pasta [skip ci]"
             git push origin HEAD:${GITHUB_REF_NAME}
           fi
 
@@ -42,12 +42,15 @@ jobs:
         with:
           gradle-version: '9.6.0'
 
-      - name: Build debug APK
+      - name: Build debug APKs
         run: gradle :app:assembleDebug --stacktrace
 
-      - name: Upload APK
+      - name: Show APK sizes
+        run: find app/build/outputs/apk/debug -name '*.apk' -exec ls -lh {} \;
+
+      - name: Upload APKs
         uses: actions/upload-artifact@v4
         with:
-          name: GetMuvi-0.3.1-debug
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: GetMuvi-0.3.2-debug-apks
+          path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
