@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Environment
+import android.os.SystemClock
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.enableEdgeToEdge
@@ -86,6 +87,7 @@ import org.json.JSONObject
 import java.io.File
 import java.util.Locale
 import java.util.UUID
+import kotlin.math.abs
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
@@ -137,7 +139,6 @@ data class MediaSummary(
     val uploader: String = "",
     val durationSeconds: Long? = null,
     val playlistCount: Int = 0,
-    val entries: List<String> = emptyList(),
     val playlistEntries: List<PlaylistEntry> = emptyList(),
     val options: List<DownloadOption> = emptyList()
 )
@@ -166,12 +167,13 @@ private data class DownloadAttempt(
 )
 
 private data class FormatDescriptor(
-    val height: Int?,
     val ext: String,
-    val hasVideo: Boolean,
-    val hasAudio: Boolean,
     val bytes: Long?
 )
+
+private const val PROGRESS_UI_INTERVAL_MS = 250L
+private const val PROGRESS_UI_DELTA = 0.01f
+private val STATUS_WHITESPACE = Regex("\\s+")
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _state = MutableStateFlow(UiState())
@@ -209,7 +211,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
             runCatching {
                 val app = getApplication<YTDownloaderApp>()
-                app.ensureEngineReady()
+                app.ensureDownloaderReady()
                 _state.value = _state.value.copy(status = "Analisando mídia e formatos…")
 
                 val request = YoutubeDLRequest(cleanUrl)
@@ -249,7 +251,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     uploader = json.optString("uploader", json.optString("channel", "")),
                     durationSeconds = if (json.has("duration") && !json.isNull("duration")) json.optLong("duration") else null,
                     playlistCount = playlistEntries.size,
-                    entries = playlistEntries.map { it.title }.take(12),
                     playlistEntries = playlistEntries,
                     options = options
                 )
@@ -274,34 +275,41 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             return playlistFallbackOptions()
         }
 
-        val formats = mutableListOf<FormatDescriptor>()
+        val videoByHeight = mutableMapOf<Int, MutableList<FormatDescriptor>>()
+        val audioExts = mutableSetOf<String>()
+        var hasAnyAudio = false
+
         for (i in 0 until formatsArray.length()) {
             val format = formatsArray.optJSONObject(i) ?: continue
             val vcodec = format.optString("vcodec", "none")
             val acodec = format.optString("acodec", "none")
             val ext = format.optString("ext", "").lowercase(Locale.ROOT)
-            val height = if (format.has("height") && !format.isNull("height")) format.optInt("height") else null
+            val hasVideo = vcodec.isNotBlank() && vcodec != "none"
+            val hasAudio = acodec.isNotBlank() && acodec != "none"
+            val height = if (format.has("height") && !format.isNull("height")) {
+                format.optInt("height").takeIf { it > 0 }
+            } else {
+                null
+            }
             val size = when {
                 format.has("filesize") && !format.isNull("filesize") -> format.optLong("filesize")
                 format.has("filesize_approx") && !format.isNull("filesize_approx") -> format.optLong("filesize_approx")
                 else -> null
             }?.takeIf { it > 0 }
 
-            formats += FormatDescriptor(
-                height = height?.takeIf { it > 0 },
-                ext = ext,
-                hasVideo = vcodec.isNotBlank() && vcodec != "none",
-                hasAudio = acodec.isNotBlank() && acodec != "none",
-                bytes = size
-            )
+            if (hasAudio) hasAnyAudio = true
+
+            if (hasVideo && height != null) {
+                videoByHeight.getOrPut(height) { mutableListOf() }
+                    .add(FormatDescriptor(ext = ext, bytes = size))
+            }
+
+            if (hasAudio && !hasVideo && ext.isNotBlank()) {
+                audioExts += ext
+            }
         }
 
-        val video = formats.filter { it.hasVideo && it.height != null }
-        val audio = formats.filter { it.hasAudio && !it.hasVideo }
-        val heights = video.mapNotNull { it.height }.distinct().sortedDescending()
-        val audioExts = audio.map { it.ext }.filter { it.isNotBlank() }.toSet()
         val result = mutableListOf<DownloadOption>()
-
         result += DownloadOption(
             id = "best-av",
             kind = MediaKind.VIDEO_AUDIO,
@@ -310,10 +318,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             subtitle = "Escolhe automaticamente a melhor combinação de vídeo + áudio"
         )
 
+        val heights = videoByHeight.keys.sortedDescending()
         heights.forEach { height ->
-            val atHeight = video.filter { it.height == height }
-            val extOrder = listOf("mp4", "webm") + atHeight.map { it.ext }.filter { it.isNotBlank() && it !in setOf("mp4", "webm") }
-            extOrder.distinct().forEach { ext ->
+            val atHeight = videoByHeight[height].orEmpty()
+            val extOrder = (listOf("mp4", "webm") + atHeight.map { it.ext }
+                .filter { it.isNotBlank() && it !in setOf("mp4", "webm") }).distinct()
+
+            extOrder.forEach { ext ->
                 val matching = atHeight.filter { it.ext == ext }
                 if (matching.isNotEmpty()) {
                     val bytes = matching.mapNotNull { it.bytes }.maxOrNull()
@@ -332,9 +343,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         heights.forEach { height ->
-            val atHeight = video.filter { it.height == height }
-            val extOrder = listOf("mp4", "webm") + atHeight.map { it.ext }.filter { it.isNotBlank() && it !in setOf("mp4", "webm") }
-            extOrder.distinct().forEach { ext ->
+            val atHeight = videoByHeight[height].orEmpty()
+            val extOrder = (listOf("mp4", "webm") + atHeight.map { it.ext }
+                .filter { it.isNotBlank() && it !in setOf("mp4", "webm") }).distinct()
+
+            extOrder.forEach { ext ->
                 val matching = atHeight.filter { it.ext == ext }
                 if (matching.isNotEmpty()) {
                     val bytes = matching.mapNotNull { it.bytes }.maxOrNull()
@@ -352,7 +365,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
 
-        if (audio.isNotEmpty() || formats.any { it.hasAudio }) {
+        if (hasAnyAudio) {
             result += DownloadOption(
                 id = "audio-mp3",
                 kind = MediaKind.AUDIO,
@@ -489,7 +502,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             )
 
             try {
-                app.ensureEngineReady()
+                app.ensureDownloaderReady()
+                if (
+                    option.type == DownloadType.BEST_AV ||
+                    option.type == DownloadType.VIDEO_AUDIO ||
+                    option.type == DownloadType.AUDIO_CONVERT
+                ) {
+                    app.ensureFfmpegReady()
+                }
 
                 var completed = 0
                 var failed = 0
@@ -575,6 +595,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
                 _state.value = UiState(
                     successMessage = message,
+                    customFolder = customTree,
                     resetToken = _state.value.resetToken + 1
                 )
             } catch (error: Throwable) {
@@ -588,6 +609,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             } finally {
                 processId = null
                 cancelRequested = false
+                if (customTree != null) {
+                    runCatching { jobDir.deleteRecursively() }
+                } else {
+                    jobDir.listFiles()?.forEach { file ->
+                        if (file.name.endsWith(".part") || file.name.endsWith(".ytdl")) {
+                            file.delete()
+                        }
+                    }
+                }
             }
         }
     }
@@ -675,23 +705,37 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     restrictFilenames = attempt.restrictFilenames
                 )
 
+                var lastUiUpdateAt = 0L
+                var lastUiProgress = -1f
+
                 YoutubeDL.getInstance().execute(request, currentProcessId) { itemProgress, eta, line ->
                     val overallProgress = if (totalItems > 1) {
                         (completedBeforeThisItem + itemProgress.coerceIn(0f, 100f) / 100f) / totalItems.toFloat()
                     } else {
                         itemProgress.coerceIn(0f, 100f) / 100f
-                    }
+                    }.coerceIn(0f, 1f)
 
-                    _state.value = _state.value.copy(
-                        progress = overallProgress.coerceIn(0f, 1f),
-                        etaSeconds = eta,
-                        status = when {
-                            totalItems > 1 && line.isNotBlank() -> "Item $itemNumber de $totalItems • ${compactStatus(line)}"
-                            totalItems > 1 -> "Item $itemNumber de $totalItems • $itemTitle"
-                            line.isNotBlank() -> compactStatus(line)
-                            else -> "Baixando…"
-                        }
-                    )
+                    val now = SystemClock.elapsedRealtime()
+                    val shouldRefreshUi = itemProgress >= 99.5f ||
+                        now - lastUiUpdateAt >= PROGRESS_UI_INTERVAL_MS ||
+                        abs(overallProgress - lastUiProgress) >= PROGRESS_UI_DELTA
+
+                    if (shouldRefreshUi) {
+                        lastUiUpdateAt = now
+                        lastUiProgress = overallProgress
+                        val compactLine = if (line.isNotBlank()) compactStatus(line) else ""
+
+                        _state.value = _state.value.copy(
+                            progress = overallProgress,
+                            etaSeconds = eta,
+                            status = when {
+                                totalItems > 1 && compactLine.isNotBlank() -> "Item $itemNumber de $totalItems • $compactLine"
+                                totalItems > 1 -> "Item $itemNumber de $totalItems • $itemTitle"
+                                compactLine.isNotBlank() -> compactLine
+                                else -> "Baixando…"
+                            }
+                        )
+                    }
                 }
                 Unit
             }
@@ -895,7 +939,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun compactStatus(line: String): String {
-        val clean = line.trim().replace(Regex("\\s+"), " ")
+        val clean = line.trim().replace(STATUS_WHITESPACE, " ")
         return if (clean.length <= 90) clean else clean.take(87) + "…"
     }
 }
@@ -1037,12 +1081,24 @@ fun DownloaderScreen(initialUrl: String, vm: MainViewModel = viewModel()) {
                         color = MaterialTheme.colorScheme.secondaryContainer,
                         shape = RoundedCornerShape(16.dp)
                     ) {
-                        Text(
-                            message,
-                            modifier = Modifier.padding(14.dp),
-                            color = MaterialTheme.colorScheme.onSecondaryContainer,
-                            fontWeight = FontWeight.SemiBold
-                        )
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Text(
+                                message,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            OutlinedButton(
+                                onClick = { openDownloadFolder(context, state.customFolder) },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(Icons.Rounded.Folder, null)
+                                Spacer(Modifier.size(8.dp))
+                                Text("Abrir pasta")
+                            }
+                        }
                     }
                 }
             }
@@ -1160,17 +1216,17 @@ fun DownloaderScreen(initialUrl: String, vm: MainViewModel = viewModel()) {
                     }
                 }
 
-                if (media.entries.isNotEmpty()) {
+                if (media.playlistEntries.isNotEmpty()) {
                     item {
                         Text("Itens encontrados", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                     }
-                    items(media.entries) { title ->
+                    items(media.playlistEntries.take(12)) { entry ->
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             Icon(Icons.Rounded.PlaylistPlay, null, tint = MaterialTheme.colorScheme.primary)
-                            Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(entry.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
                 }
