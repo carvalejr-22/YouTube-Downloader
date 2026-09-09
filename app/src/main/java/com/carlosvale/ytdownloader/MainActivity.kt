@@ -92,12 +92,12 @@ class MainActivity : ComponentActivity() {
 }
 
 enum class DownloadMode(val title: String, val subtitle: String) {
-    BEST_AV("Máxima qualidade", "Vídeo + áudio na melhor qualidade disponível"),
-    MP4_AV("Máxima em MP4", "Prioriza vídeo MP4 + áudio M4A"),
-    VIDEO_ONLY("Só vídeo · máxima", "Melhor faixa de vídeo, sem áudio"),
-    VIDEO_MP4("Só vídeo · MP4", "Melhor vídeo possível em MP4"),
-    AUDIO_ONLY("Só áudio · original", "Preserva o melhor formato de áudio"),
-    AUDIO_MP3("Só áudio · MP3", "Converte o melhor áudio para MP3")
+    BEST_AV("Vídeo + áudio · máxima", "Melhor qualidade disponível na plataforma"),
+    MP4_AV("Vídeo + áudio · MP4", "Prioriza vídeo MP4 + áudio M4A"),
+    VIDEO_ONLY("Só vídeo · máxima", "Melhor faixa disponível sem áudio"),
+    VIDEO_MP4("Só vídeo · MP4", "Melhor vídeo disponível em MP4"),
+    AUDIO_ONLY("Só áudio · original", "Extrai o melhor áudio e preserva o formato"),
+    AUDIO_MP3("Só áudio · MP3", "Extrai e converte o melhor áudio para MP3")
 }
 
 data class PlaylistEntry(
@@ -181,7 +181,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     .addOption("--skip-download")
                     .addOption("--no-warnings")
                     .addOption("--yes-playlist")
-                    .addOption("--extractor-args", "youtube:player_client=default,web_embedded,tv_downgraded")
+
+                if (isYouTubeUrl(cleanUrl)) {
+                    request.addOption(
+                        "--extractor-args",
+                        "youtube:player_client=default,web_embedded,tv_downgraded"
+                    )
+                }
 
                 val output = YoutubeDL.getInstance().execute(request).out.trim()
                 val json = JSONObject(output)
@@ -192,9 +198,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     for (i in 0 until entriesArray.length()) {
                         val item = entriesArray.optJSONObject(i) ?: continue
                         val title = item.optString("title").ifBlank { "Item ${i + 1}" }
-                        val id = item.optString("id")
-                        val rawUrl = item.optString("url")
-                        val entryUrl = normalizePlaylistEntryUrl(rawUrl, id)
+                        val entryUrl = normalizePlaylistEntryUrl(item)
                         if (entryUrl.isNotBlank()) {
                             playlistEntries += PlaylistEntry(title = title, url = entryUrl)
                         }
@@ -240,7 +244,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             cancelRequested = false
             val customTree = _state.value.customFolder
             val jobDir = if (customTree == null) {
-                File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "YT Downloader")
+                File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "BaixaMidia")
             } else {
                 File(app.cacheDir, "export-${System.currentTimeMillis()}")
             }
@@ -327,7 +331,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
 
                 if (completed == 0 && failed > 0) {
-                    throw lastError ?: RuntimeException("Nenhum item da playlist pôde ser baixado")
+                    throw lastError ?: RuntimeException("Nenhum item da lista pôde ser baixado")
                 }
 
                 if (customTree != null) {
@@ -337,8 +341,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
 
                 val message = when {
-                    isPlaylist && failed == 0 -> "Playlist concluída: $completed de $totalItems itens baixados com sucesso."
-                    isPlaylist -> "Playlist finalizada: $completed de $totalItems itens baixados. $failed item(ns) não puderam ser baixados."
+                    isPlaylist && failed == 0 -> "Lista concluída: $completed de $totalItems itens baixados com sucesso."
+                    isPlaylist -> "Lista finalizada: $completed de $totalItems itens baixados. $failed item(ns) não puderam ser baixados."
                     else -> "Download concluído com sucesso."
                 }
 
@@ -371,18 +375,28 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         itemNumber: Int,
         itemTitle: String
     ): Result<Unit> {
-        val attempts = listOf(
-            DownloadAttempt("rota padrão"),
-            DownloadAttempt(
-                label = "rota alternativa",
-                playerClients = "web_embedded,tv_downgraded"
-            ),
-            DownloadAttempt(
-                label = "modo compatibilidade",
-                playerClients = "web_embedded,tv_downgraded",
-                compatibilityMode = true
+        val attempts = if (isYouTubeUrl(url)) {
+            listOf(
+                DownloadAttempt("rota padrão"),
+                DownloadAttempt(
+                    label = "rota alternativa",
+                    playerClients = "web_embedded,tv_downgraded"
+                ),
+                DownloadAttempt(
+                    label = "modo compatibilidade",
+                    playerClients = "web_embedded,tv_downgraded",
+                    compatibilityMode = true
+                )
             )
-        )
+        } else {
+            listOf(
+                DownloadAttempt("rota padrão"),
+                DownloadAttempt(
+                    label = "modo compatibilidade",
+                    compatibilityMode = true
+                )
+            )
+        }
 
         var finalError: Throwable? = null
 
@@ -449,7 +463,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
             val error = result.exceptionOrNull() ?: RuntimeException("Falha no download")
             finalError = error
-            if (!isRetryableYouTubeError(error) || attemptIndex == attempts.lastIndex) break
+            if (!isRetryableDownloadError(error) || attemptIndex == attempts.lastIndex) break
         }
 
         return Result.failure(finalError ?: RuntimeException("Falha no download"))
@@ -465,6 +479,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     ): YoutubeDLRequest {
         val request = YoutubeDLRequest(url)
             .addOption("-o", File(outputDir, outputTemplate).absolutePath)
+            .addOption("--trim-filenames", "120")
             .addOption("--no-warnings")
             .addOption("--newline")
             .addOption("--no-playlist")
@@ -498,25 +513,28 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
             DownloadMode.VIDEO_ONLY -> request.addOption(
                 "-f",
-                if (compatibilityMode) "bv*[protocol^=http]/bestvideo*" else "bestvideo*"
+                if (compatibilityMode) "bestvideo/bv" else "bestvideo"
             )
 
             DownloadMode.VIDEO_MP4 -> {
                 request.addOption(
                     "-f",
                     if (compatibilityMode) {
-                        "bv*[ext=mp4][protocol^=http]/bv*[ext=mp4]/bestvideo*"
+                        "bestvideo[ext=mp4]/bestvideo"
                     } else {
-                        "bestvideo*[ext=mp4]/bestvideo*"
+                        "bestvideo[ext=mp4]/bestvideo"
                     }
                 )
                 request.addOption("--remux-video", "mp4")
             }
 
-            DownloadMode.AUDIO_ONLY -> request.addOption(
-                "-f",
-                if (compatibilityMode) "ba[ext=m4a]/ba/b" else "bestaudio/best"
-            )
+            DownloadMode.AUDIO_ONLY -> {
+                request.addOption(
+                    "-f",
+                    if (compatibilityMode) "ba[ext=m4a]/ba/b" else "bestaudio/best"
+                )
+                request.addOption("-x")
+            }
 
             DownloadMode.AUDIO_MP3 -> {
                 request.addOption(
@@ -543,33 +561,68 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         )
     }
 
-    private fun normalizePlaylistEntryUrl(rawUrl: String, id: String): String {
-        val candidate = rawUrl.trim()
-        return when {
-            candidate.startsWith("http://") || candidate.startsWith("https://") -> candidate
-            id.isNotBlank() -> "https://www.youtube.com/watch?v=$id"
-            candidate.matches(Regex("^[A-Za-z0-9_-]{11}$")) -> "https://www.youtube.com/watch?v=$candidate"
-            else -> ""
+    private fun normalizePlaylistEntryUrl(item: JSONObject): String {
+        val candidates = listOf(
+            item.optString("webpage_url"),
+            item.optString("original_url"),
+            item.optString("url")
+        ).map { it.trim() }.filter { it.isNotBlank() }
+
+        candidates.firstOrNull { it.startsWith("http://") || it.startsWith("https://") }?.let { return it }
+        candidates.firstOrNull { it.startsWith("//") }?.let { return "https:$it" }
+
+        val id = item.optString("id").trim()
+        val extractor = listOf(
+            item.optString("ie_key"),
+            item.optString("extractor_key"),
+            item.optString("extractor")
+        ).joinToString(" ").lowercase()
+
+        val looksLikeYouTube = extractor.contains("youtube") || id.matches(Regex("^[A-Za-z0-9_-]{11}$"))
+        return if (looksLikeYouTube && id.isNotBlank()) {
+            "https://www.youtube.com/watch?v=$id"
+        } else {
+            ""
         }
     }
 
-    private fun isRetryableYouTubeError(error: Throwable): Boolean {
+    private fun isYouTubeUrl(url: String): Boolean {
+        val host = runCatching { Uri.parse(url).host.orEmpty().lowercase() }.getOrDefault("")
+        return host == "youtu.be" ||
+            host == "youtube.com" ||
+            host.endsWith(".youtube.com") ||
+            host == "youtube-nocookie.com" ||
+            host.endsWith(".youtube-nocookie.com")
+    }
+
+    private fun isRetryableDownloadError(error: Throwable): Boolean {
         val message = error.message.orEmpty().lowercase()
         return message.contains("403") ||
             message.contains("forbidden") ||
             message.contains("requested format is not available") ||
             message.contains("unable to download video data") ||
-            message.contains("fragment")
+            message.contains("fragment") ||
+            message.contains("timeout") ||
+            message.contains("timed out") ||
+            message.contains("connection reset")
     }
 
     private fun friendlyError(error: Throwable): String {
         val raw = error.message.orEmpty()
         return when {
+            raw.contains("File name too long", ignoreCase = true) ->
+                "O nome gerado pela plataforma excedeu o limite do Android. O BaixaMídia reduz nomes automaticamente; tente novamente com a versão atualizada."
+
+            raw.contains("login", ignoreCase = true) ||
+                raw.contains("cookies", ignoreCase = true) ||
+                raw.contains("private", ignoreCase = true) ->
+                "Esse conteúdo parece exigir login, cookies ou permissão privada. Use um link público e acessível sem conta."
+
             raw.contains("403", ignoreCase = true) || raw.contains("Forbidden", ignoreCase = true) ->
-                "O YouTube recusou as rotas disponíveis (erro 403). O app já tentou rotas alternativas automaticamente. Tente novamente em alguns instantes."
+                "A plataforma recusou a rota de download (erro 403). O app já tentou uma rota alternativa quando disponível. Tente novamente em alguns instantes."
 
             raw.contains("Requested format is not available", ignoreCase = true) ->
-                "Essa qualidade não está disponível por uma rota compatível. Tente outra opção de formato."
+                "Esse formato não está disponível para este link. Tente outra opção de vídeo ou áudio."
 
             raw.isNotBlank() -> raw
             else -> "Não foi possível concluir o download."
@@ -584,6 +637,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val mime = when (file.extension.lowercase()) {
                 "mp3" -> "audio/mpeg"
                 "m4a" -> "audio/mp4"
+                "aac" -> "audio/aac"
+                "opus" -> "audio/opus"
+                "ogg" -> "audio/ogg"
                 "webm" -> "video/webm"
                 "mkv" -> "video/x-matroska"
                 else -> "video/mp4"
@@ -639,9 +695,9 @@ fun DownloaderScreen(initialUrl: String, vm: MainViewModel = viewModel()) {
             TopAppBar(
                 title = {
                     Column {
-                        Text("YT Downloader", fontWeight = FontWeight.Bold)
+                        Text("BaixaMídia", fontWeight = FontWeight.Bold)
                         Text(
-                            "Vídeo, áudio e playlists",
+                            "Vídeos e áudios de redes sociais",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -668,7 +724,7 @@ fun DownloaderScreen(initialUrl: String, vm: MainViewModel = viewModel()) {
                     },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
-                    label = { Text("Link do vídeo ou playlist") },
+                    label = { Text("Link do vídeo, áudio ou playlist") },
                     leadingIcon = { Icon(Icons.Rounded.Link, null) },
                     trailingIcon = {
                         IconButton(onClick = {
@@ -760,7 +816,7 @@ fun DownloaderScreen(initialUrl: String, vm: MainViewModel = viewModel()) {
                             Column(Modifier.weight(1f)) {
                                 Text("Pasta de download", fontWeight = FontWeight.SemiBold)
                                 Text(
-                                    if (state.customFolder == null) "Downloads/YT Downloader" else "Pasta personalizada selecionada",
+                                    if (state.customFolder == null) "Downloads/BaixaMidia" else "Pasta personalizada selecionada",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -785,7 +841,7 @@ fun DownloaderScreen(initialUrl: String, vm: MainViewModel = viewModel()) {
                         ) {
                             Icon(Icons.Rounded.Download, null)
                             Spacer(Modifier.padding(4.dp))
-                            Text(if (media.playlistCount > 0) "Baixar playlist (${media.playlistCount})" else "Baixar")
+                            Text(if (media.playlistCount > 0) "Baixar lista (${media.playlistCount})" else "Baixar")
                         }
                     }
                 }
@@ -793,7 +849,7 @@ fun DownloaderScreen(initialUrl: String, vm: MainViewModel = viewModel()) {
                 if (media.entries.isNotEmpty()) {
                     item {
                         Text(
-                            "Itens da playlist",
+                            "Itens encontrados",
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.Bold
                         )
@@ -841,7 +897,7 @@ private fun MediaCard(media: MediaSummary) {
                     tint = MaterialTheme.colorScheme.primary
                 )
                 Text(
-                    if (media.playlistCount > 0) "Playlist encontrada" else "Vídeo encontrado",
+                    if (media.playlistCount > 0) "Lista encontrada" else "Mídia encontrada",
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.primary
                 )
@@ -916,7 +972,7 @@ private fun DownloadProgress(state: UiState, onCancel: () -> Unit) {
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    if (state.totalItems > 1) "Baixando playlist" else "Baixando",
+                    if (state.totalItems > 1) "Baixando lista" else "Baixando",
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.weight(1f)
                 )
@@ -970,9 +1026,9 @@ private fun EmptyState() {
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Icon(Icons.Rounded.Download, null, tint = MaterialTheme.colorScheme.primary)
-            Text("Cole um link e toque em Analisar", fontWeight = FontWeight.SemiBold)
+            Text("Cole um link de uma rede social e toque em Analisar", fontWeight = FontWeight.SemiBold)
             Text(
-                "O app identifica vídeo ou playlist e mostra as opções de saída.",
+                "O app identifica a mídia e mostra opções de vídeo e áudio.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
