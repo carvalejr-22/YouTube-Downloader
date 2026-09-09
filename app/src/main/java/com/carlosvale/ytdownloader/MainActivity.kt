@@ -133,7 +133,8 @@ data class UiState(
 private data class DownloadAttempt(
     val label: String,
     val playerClients: String? = null,
-    val compatibilityMode: Boolean = false
+    val compatibilityMode: Boolean = false,
+    val restrictFilenames: Boolean = false
 )
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
@@ -282,7 +283,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                             status = "Item $itemNumber de $totalItems • ${entry.title}"
                         )
 
-                        val outputTemplate = "${itemNumber.toString().padStart(itemNumberWidth, '0')} - %(title)s.%(ext)s"
+                        val outputTemplate = "${itemNumber.toString().padStart(itemNumberWidth, '0')} - %(title).42s.%(ext)s"
                         val result = executeWithFallback(
                             url = entry.url,
                             mode = mode,
@@ -316,7 +317,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         url = cleanUrl,
                         mode = mode,
                         outputDir = jobDir,
-                        outputTemplate = "%(title)s.%(ext)s",
+                        outputTemplate = "%(title).46s.%(ext)s",
                         completedBeforeThisItem = 0,
                         totalItems = 1,
                         itemNumber = 1,
@@ -386,6 +387,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     label = "modo compatibilidade",
                     playerClients = "web_embedded,tv_downgraded",
                     compatibilityMode = true
+                ),
+                DownloadAttempt(
+                    label = "nome seguro",
+                    playerClients = "web_embedded,tv_downgraded",
+                    compatibilityMode = true,
+                    restrictFilenames = true
                 )
             )
         } else {
@@ -394,6 +401,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 DownloadAttempt(
                     label = "modo compatibilidade",
                     compatibilityMode = true
+                ),
+                DownloadAttempt(
+                    label = "nome seguro",
+                    compatibilityMode = true,
+                    restrictFilenames = true
                 )
             )
         }
@@ -433,7 +445,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     outputDir = outputDir,
                     outputTemplate = outputTemplate,
                     playerClients = attempt.playerClients,
-                    compatibilityMode = attempt.compatibilityMode
+                    compatibilityMode = attempt.compatibilityMode,
+                    restrictFilenames = attempt.restrictFilenames
                 )
 
                 YoutubeDL.getInstance().execute(request, currentProcessId) { itemProgress, eta, line ->
@@ -475,16 +488,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         outputDir: File,
         outputTemplate: String,
         playerClients: String?,
-        compatibilityMode: Boolean
+        compatibilityMode: Boolean,
+        restrictFilenames: Boolean
     ): YoutubeDLRequest {
         val request = YoutubeDLRequest(url)
             .addOption("-o", File(outputDir, outputTemplate).absolutePath)
-            .addOption("--trim-filenames", "120")
+            .addOption("--trim-filenames", "64")
             .addOption("--no-warnings")
             .addOption("--newline")
             .addOption("--no-playlist")
             .addOption("--retries", "3")
             .addOption("--fragment-retries", "3")
+
+        if (restrictFilenames) {
+            request.addOption("--restrict-filenames")
+        }
 
         if (playerClients != null) {
             request.addOption("--extractor-args", "youtube:player_client=$playerClients")
@@ -604,14 +622,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             message.contains("fragment") ||
             message.contains("timeout") ||
             message.contains("timed out") ||
-            message.contains("connection reset")
+            message.contains("connection reset") ||
+            message.contains("file name too long") ||
+            message.contains("errno 36") ||
+            message.contains("unable to open for writing")
     }
 
     private fun friendlyError(error: Throwable): String {
         val raw = error.message.orEmpty()
         return when {
-            raw.contains("File name too long", ignoreCase = true) ->
-                "O nome gerado pela plataforma excedeu o limite do Android. O BaixaMídia reduz nomes automaticamente; tente novamente com a versão atualizada."
+            raw.contains("File name too long", ignoreCase = true) ||
+                raw.contains("Errno 36", ignoreCase = true) ->
+                "A plataforma gerou um nome de arquivo incompatível com o Android. O BaixaMídia tentou também um nome seguro, mas essa mídia ainda não pôde ser salva."
 
             raw.contains("login", ignoreCase = true) ||
                 raw.contains("cookies", ignoreCase = true) ||
