@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "YTDownloader"
+rootProject.name = "GetMuvi"
 include(":app")
