@@ -943,8 +943,29 @@ fun DownloaderScreen(initialUrl: String, vm: MainViewModel = viewModel()) {
             TopAppBar(
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
                 title = {
-                    Column {
-                        Text("GetMuvi", fontWeight = FontWeight.ExtraBold)
+                    Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                "Get",
+                                style = MaterialTheme.typography.headlineSmall,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = Color.White
+                            )
+                            Text(
+                                "Muvi",
+                                style = MaterialTheme.typography.headlineSmall.copy(
+                                    brush = Brush.linearGradient(
+                                        listOf(
+                                            Color(0xFF20F3E8),
+                                            Color(0xFF1597FF),
+                                            Color(0xFF765BFF),
+                                            Color(0xFFF05CFF)
+                                        )
+                                    ),
+                                    fontWeight = FontWeight.ExtraBold
+                                )
+                            )
+                        }
                         Text(
                             "Baixador de músicas e vídeos",
                             style = MaterialTheme.typography.labelSmall,
@@ -1165,16 +1186,16 @@ fun DownloaderScreen(initialUrl: String, vm: MainViewModel = viewModel()) {
 @Composable
 private fun BrandCard() {
     val gradient = Brush.linearGradient(
-        listOf(Color(0xFF00D5C7), Color(0xFF2188FF), Color(0xFF8B5CFF))
+        listOf(Color(0xFF19E7DE), Color(0xFF098FFF), Color(0xFF654CFF), Color(0xFFE752FF))
     )
     Card(
-        shape = RoundedCornerShape(24.dp),
+        shape = RoundedCornerShape(28.dp),
         colors = CardDefaults.cardColors(containerColor = Color.Transparent)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(gradient, RoundedCornerShape(24.dp))
+                .background(gradient, RoundedCornerShape(28.dp))
                 .padding(16.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(14.dp)
@@ -1182,7 +1203,7 @@ private fun BrandCard() {
             Image(
                 painter = painterResource(R.drawable.getmuvi_icon),
                 contentDescription = "GetMuvi",
-                modifier = Modifier.size(68.dp)
+                modifier = Modifier.size(72.dp)
             )
             Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text("Baixe do seu jeito", fontWeight = FontWeight.ExtraBold, color = Color.White)
