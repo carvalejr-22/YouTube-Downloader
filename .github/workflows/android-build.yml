@@ -37,28 +37,28 @@ jobs:
       - name: Upload arm64 test APK
         uses: actions/upload-artifact@v4
         with:
-          name: GetMuvi-0.3.3-arm64-v8a
+          name: GetMuvi-0.3.4-arm64-v8a
           path: app/build/outputs/apk/debug/app-arm64-v8a-debug.apk
           if-no-files-found: error
 
       - name: Upload universal test APK
         uses: actions/upload-artifact@v4
         with:
-          name: GetMuvi-0.3.3-universal
+          name: GetMuvi-0.3.4-universal
           path: app/build/outputs/apk/debug/app-universal-debug.apk
           if-no-files-found: error
 
       - name: Prepare release APK
         shell: bash
-        run: cp app/build/outputs/apk/debug/app-arm64-v8a-debug.apk GetMuvi-0.3.3-arm64-v8a.apk
+        run: cp app/build/outputs/apk/debug/app-arm64-v8a-debug.apk GetMuvi-0.3.4-arm64-v8a.apk
 
       - name: Publish APK release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v0.3.3 >/dev/null 2>&1; then
-            gh release upload v0.3.3 GetMuvi-0.3.3-arm64-v8a.apk --clobber
+          if gh release view v0.3.4 >/dev/null 2>&1; then
+            gh release upload v0.3.4 GetMuvi-0.3.4-arm64-v8a.apk --clobber
           else
-            gh release create v0.3.3 GetMuvi-0.3.3-arm64-v8a.apk --title "GetMuvi 0.3.3" --notes "Nova compilação de teste ARM64 do GetMuvi, mantendo as otimizações e funcionalidades da versão 0.3.2."
+            gh release create v0.3.4 GetMuvi-0.3.4-arm64-v8a.apk --title "GetMuvi 0.3.4" --notes "Corrige o botão Abrir pasta para localizar e abrir exatamente a pasta usada no último download."
           fi
