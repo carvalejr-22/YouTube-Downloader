@@ -1,10 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.YTDownloader" parent="android:style/Theme.Material.Light.NoActionBar">
+    <style name="Theme.GetMuvi" parent="android:style/Theme.Material.Light.NoActionBar">
         <item name="android:fontFamily">sans</item>
         <item name="android:windowLightStatusBar">false</item>
-        <item name="android:statusBarColor">#101114</item>
-        <item name="android:navigationBarColor">#101114</item>
+        <item name="android:statusBarColor">#070B18</item>
+        <item name="android:navigationBarColor">#070B18</item>
         <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:windowBackground">#070B18</item>
     </style>
 </resources>
