@@ -37,10 +37,10 @@ jobs:
         shell: pwsh
         run: python desktop/generate_icon.py
 
-      - name: Download FFmpeg
+      - name: Download FFmpeg LGPL
         shell: pwsh
         run: |
-          $url = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip'
+          $url = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-lgpl.zip'
           Invoke-WebRequest -Uri $url -OutFile ffmpeg.zip
           Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg-package -Force
           $ffmpeg = Get-ChildItem -Path ffmpeg-package -Filter ffmpeg.exe -Recurse | Select-Object -First 1
@@ -102,5 +102,5 @@ jobs:
           if (gh release view windows-v0.1.0 2>$null) {
             gh release upload windows-v0.1.0 $portable $installer --clobber
           } else {
-            gh release create windows-v0.1.0 $portable $installer --title 'GetMuvi Windows 0.1.0' --notes 'Primeira versão de teste do GetMuvi para Windows. Inclui executável portátil e instalador.'
+            gh release create windows-v0.1.0 $portable $installer --target getmuvi-windows-0.1.0 --title 'GetMuvi Windows 0.1.0' --notes 'Primeira versão de teste do GetMuvi para Windows. Inclui executável portátil e instalador.'
           }
