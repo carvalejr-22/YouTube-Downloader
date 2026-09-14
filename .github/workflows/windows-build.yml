@@ -11,6 +11,11 @@ on:
 permissions:
   contents: write
 
+env:
+  GETMUVI_VERSION: '0.1.1'
+  CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+  CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+
 jobs:
   build-windows:
     runs-on: windows-latest
@@ -32,6 +37,14 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r desktop/requirements.txt
+
+      - name: Apply build version
+        shell: pwsh
+        run: |
+          $path = 'desktop/getmuvi_windows.py'
+          $text = Get-Content $path -Raw
+          $text = $text -replace 'APP_VERSION = "[^"]+"', "APP_VERSION = `"$env:GETMUVI_VERSION`""
+          Set-Content -Path $path -Value $text -Encoding utf8
 
       - name: Generate GetMuvi icon
         shell: pwsh
@@ -58,12 +71,32 @@ jobs:
             --windowed `
             --name GetMuvi `
             --icon desktop/assets/getmuvi.ico `
+            --version-file desktop/version_info.txt `
+            --manifest desktop/getmuvi.manifest `
             --collect-all customtkinter `
             --add-binary "$env:FFMPEG_BIN_DIR\ffmpeg.exe;bin" `
             --add-binary "$env:FFMPEG_BIN_DIR\ffprobe.exe;bin" `
             --distpath desktop/dist `
             --workpath desktop/build `
             desktop/getmuvi_windows.py
+
+      - name: Sign portable EXE when certificate is configured
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:CERT_PFX_BASE64) -or [string]::IsNullOrWhiteSpace($env:CERT_PASSWORD)) {
+            Write-Host 'Certificado não configurado. Gerando build de teste sem assinatura Authenticode.'
+            exit 0
+          }
+          [IO.File]::WriteAllBytes('certificate.pfx', [Convert]::FromBase64String($env:CERT_PFX_BASE64))
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Filter signtool.exe -Recurse |
+            Where-Object { $_.FullName -match '\\x64\\signtool\.exe$' } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if (-not $signtool) { throw 'signtool.exe não encontrado.' }
+          & $signtool.FullName sign /f certificate.pfx /p $env:CERT_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 desktop\dist\GetMuvi.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Falha ao assinar GetMuvi.exe.' }
+          & $signtool.FullName verify /pa /v desktop\dist\GetMuvi.exe
+          Remove-Item certificate.pfx -Force
 
       - name: Install Inno Setup
         shell: pwsh
@@ -76,19 +109,53 @@ jobs:
           if (-not (Test-Path $iscc)) { throw 'Inno Setup não encontrado.' }
           & $iscc desktop\GetMuvi.iss
 
+      - name: Sign installer when certificate is configured
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:CERT_PFX_BASE64) -or [string]::IsNullOrWhiteSpace($env:CERT_PASSWORD)) {
+            Write-Host 'Certificado não configurado. Instalador permanece sem assinatura Authenticode.'
+            exit 0
+          }
+          [IO.File]::WriteAllBytes('certificate.pfx', [Convert]::FromBase64String($env:CERT_PFX_BASE64))
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Filter signtool.exe -Recurse |
+            Where-Object { $_.FullName -match '\\x64\\signtool\.exe$' } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if (-not $signtool) { throw 'signtool.exe não encontrado.' }
+          & $signtool.FullName sign /f certificate.pfx /p $env:CERT_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 desktop\installer-output\GetMuvi-Setup-0.1.1.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Falha ao assinar o instalador.' }
+          & $signtool.FullName verify /pa /v desktop\installer-output\GetMuvi-Setup-0.1.1.exe
+          Remove-Item certificate.pfx -Force
+
+      - name: Generate SHA-256 checksums
+        shell: pwsh
+        run: |
+          $files = @(
+            'desktop\dist\GetMuvi.exe',
+            'desktop\installer-output\GetMuvi-Setup-0.1.1.exe'
+          )
+          $checksumFile = 'desktop\SHA256SUMS.txt'
+          if (Test-Path $checksumFile) { Remove-Item $checksumFile -Force }
+          foreach ($file in $files) {
+            $hash = (Get-FileHash $file -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $([IO.Path]::GetFileName($file))" | Add-Content -Path $checksumFile -Encoding ascii
+          }
+          Get-Content $checksumFile
+
       - name: Show output sizes
         shell: pwsh
         run: |
           Get-Item desktop\dist\GetMuvi.exe | Format-List Name,Length
-          Get-Item desktop\installer-output\GetMuvi-Setup-0.1.0.exe | Format-List Name,Length
+          Get-Item desktop\installer-output\GetMuvi-Setup-0.1.1.exe | Format-List Name,Length
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: GetMuvi-Windows-0.1.0
+          name: GetMuvi-Windows-0.1.1
           path: |
             desktop/dist/GetMuvi.exe
-            desktop/installer-output/GetMuvi-Setup-0.1.0.exe
+            desktop/installer-output/GetMuvi-Setup-0.1.1.exe
+            desktop/SHA256SUMS.txt
           if-no-files-found: error
 
       - name: Publish Windows release
@@ -98,9 +165,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $portable = 'desktop/dist/GetMuvi.exe'
-          $installer = 'desktop/installer-output/GetMuvi-Setup-0.1.0.exe'
-          if (gh release view windows-v0.1.0 2>$null) {
-            gh release upload windows-v0.1.0 $portable $installer --clobber
+          $installer = 'desktop/installer-output/GetMuvi-Setup-0.1.1.exe'
+          $checksums = 'desktop/SHA256SUMS.txt'
+          if (gh release view windows-v0.1.1 2>$null) {
+            gh release upload windows-v0.1.1 $portable $installer $checksums --clobber
           } else {
-            gh release create windows-v0.1.0 $portable $installer --target getmuvi-windows-0.1.0 --title 'GetMuvi Windows 0.1.0' --notes 'Primeira versão de teste do GetMuvi para Windows. Inclui executável portátil e instalador.'
+            gh release create windows-v0.1.1 $portable $installer $checksums --target getmuvi-windows-0.1.0 --title 'GetMuvi Windows 0.1.1' --notes 'Build com metadados oficiais do Windows, manifesto moderno, checksums SHA-256 e pipeline pronto para assinatura Authenticode. A assinatura é aplicada automaticamente quando o certificado PFX estiver configurado nos secrets do repositório.'
           }
