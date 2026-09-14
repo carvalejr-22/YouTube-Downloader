@@ -12,7 +12,7 @@ permissions:
   contents: write
 
 env:
-  GETMUVI_VERSION: '0.1.1'
+  GETMUVI_VERSION: '0.1.2'
   CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
   CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
 
@@ -38,15 +38,18 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r desktop/requirements.txt
 
-      - name: Apply build version
+      - name: Apply build version and compatibility patch
         shell: pwsh
         run: |
           $path = 'desktop/getmuvi_windows.py'
           $text = Get-Content $path -Raw
           $text = $text -replace 'APP_VERSION = "[^"]+"', "APP_VERSION = `"$env:GETMUVI_VERSION`""
+          $text = $text -replace 'def _ui\(self, fn, \*args\) -> None:', 'def _ui(self, fn, *args, **kwargs) -> None:'
+          $text = $text -replace 'self\.after\(0, lambda: fn\(\*args\)\)', 'self.after(0, lambda: fn(*args, **kwargs))'
           Set-Content -Path $path -Value $text -Encoding utf8
+          python -m py_compile desktop/getmuvi_windows.py
 
-      - name: Generate GetMuvi icon
+      - name: Generate official GetMuvi icon
         shell: pwsh
         run: python desktop/generate_icon.py
 
@@ -74,6 +77,8 @@ jobs:
             --version-file desktop/version_info.txt `
             --manifest desktop/getmuvi.manifest `
             --collect-all customtkinter `
+            --add-data "desktop/assets/getmuvi.png;assets" `
+            --add-data "desktop/assets/getmuvi.ico;assets" `
             --add-binary "$env:FFMPEG_BIN_DIR\ffmpeg.exe;bin" `
             --add-binary "$env:FFMPEG_BIN_DIR\ffprobe.exe;bin" `
             --distpath desktop/dist `
@@ -122,9 +127,9 @@ jobs:
             Sort-Object FullName -Descending |
             Select-Object -First 1
           if (-not $signtool) { throw 'signtool.exe não encontrado.' }
-          & $signtool.FullName sign /f certificate.pfx /p $env:CERT_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 desktop\installer-output\GetMuvi-Setup-0.1.1.exe
+          & $signtool.FullName sign /f certificate.pfx /p $env:CERT_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 desktop\installer-output\GetMuvi-Setup-0.1.2.exe
           if ($LASTEXITCODE -ne 0) { throw 'Falha ao assinar o instalador.' }
-          & $signtool.FullName verify /pa /v desktop\installer-output\GetMuvi-Setup-0.1.1.exe
+          & $signtool.FullName verify /pa /v desktop\installer-output\GetMuvi-Setup-0.1.2.exe
           Remove-Item certificate.pfx -Force
 
       - name: Generate SHA-256 checksums
@@ -132,7 +137,7 @@ jobs:
         run: |
           $files = @(
             'desktop\dist\GetMuvi.exe',
-            'desktop\installer-output\GetMuvi-Setup-0.1.1.exe'
+            'desktop\installer-output\GetMuvi-Setup-0.1.2.exe'
           )
           $checksumFile = 'desktop\SHA256SUMS.txt'
           if (Test-Path $checksumFile) { Remove-Item $checksumFile -Force }
@@ -146,15 +151,15 @@ jobs:
         shell: pwsh
         run: |
           Get-Item desktop\dist\GetMuvi.exe | Format-List Name,Length
-          Get-Item desktop\installer-output\GetMuvi-Setup-0.1.1.exe | Format-List Name,Length
+          Get-Item desktop\installer-output\GetMuvi-Setup-0.1.2.exe | Format-List Name,Length
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: GetMuvi-Windows-0.1.1
+          name: GetMuvi-Windows-0.1.2
           path: |
             desktop/dist/GetMuvi.exe
-            desktop/installer-output/GetMuvi-Setup-0.1.1.exe
+            desktop/installer-output/GetMuvi-Setup-0.1.2.exe
             desktop/SHA256SUMS.txt
           if-no-files-found: error
 
@@ -165,10 +170,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $portable = 'desktop/dist/GetMuvi.exe'
-          $installer = 'desktop/installer-output/GetMuvi-Setup-0.1.1.exe'
+          $installer = 'desktop/installer-output/GetMuvi-Setup-0.1.2.exe'
           $checksums = 'desktop/SHA256SUMS.txt'
-          if (gh release view windows-v0.1.1 2>$null) {
-            gh release upload windows-v0.1.1 $portable $installer $checksums --clobber
+          if (gh release view windows-v0.1.2 2>$null) {
+            gh release upload windows-v0.1.2 $portable $installer $checksums --clobber
           } else {
-            gh release create windows-v0.1.1 $portable $installer $checksums --target getmuvi-windows-0.1.0 --title 'GetMuvi Windows 0.1.1' --notes 'Build com metadados oficiais do Windows, manifesto moderno, checksums SHA-256 e pipeline pronto para assinatura Authenticode. A assinatura é aplicada automaticamente quando o certificado PFX estiver configurado nos secrets do repositório.'
+            gh release create windows-v0.1.2 $portable $installer $checksums --target getmuvi-windows-0.1.0 --title 'GetMuvi Windows 0.1.2' --notes 'Interface alinhada à versão Android: mesma identidade visual, informações exibidas somente após análise, fluxo pós-download simplificado, Explorer abrindo com o arquivo baixado selecionado, sem barras de rolagem. Mantém metadados oficiais, manifesto, SHA-256 e pipeline pronto para Authenticode.'
           }
