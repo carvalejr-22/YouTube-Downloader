@@ -132,16 +132,14 @@ jobs:
               raise SystemExit('YTDownloaderApp marker not found')
           app = app.replace(marker, replacement_app, 1)
 
-          companion_old = '''    private companion object {
-              const val TAG = "GetMuvi"
-          }'''
-          companion_new = '''    private companion object {
+          companion_pattern = r'    private companion object \{\s*const val TAG = "GetMuvi"\s*\}'
+          companion_replacement = '''    private companion object {
               const val TAG = "GetMuvi"
               const val STALE_EXPORT_MAX_AGE_MS = 60L * 60L * 1000L
           }'''
-          if companion_old not in app:
-              raise SystemExit('companion marker not found')
-          app = app.replace(companion_old, companion_new, 1)
+          app, companion_count = re.subn(companion_pattern, companion_replacement, app, count=1, flags=re.S)
+          if companion_count != 1:
+              raise SystemExit(f'companion replacement count={companion_count}')
           app_path.write_text(app)
 
           gradle = Path('app/build.gradle.kts')
