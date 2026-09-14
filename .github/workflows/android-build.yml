@@ -12,6 +12,11 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      SIGNING_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      SIGNING_STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      SIGNING_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      SIGNING_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
 
     steps:
       - name: Checkout
@@ -28,21 +33,6 @@ jobs:
         with:
           gradle-version: '9.6.0'
 
-      - name: Fix Kotlin regex when needed
-        shell: bash
-        env:
-          PATCH_B64: ZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCnBhdGggPSBQYXRoKCJhcHAvc3JjL21haW4vamF2YS9jb20vY2FybG9zdmFsZS95dGRvd25sb2FkZXIvTWFpbkFjdGl2aXR5Lmt0IikKdGV4dCA9IHBhdGgucmVhZF90ZXh0KCkKYmFkID0gcidSZWdleCgiXC5mXGQrXC5bXi5dKyQiKScKZ29vZCA9IHInUmVnZXgoIiIiXC5mXGQrXC5bXi5dKyQiIiIpJwppZiBiYWQgaW4gdGV4dDoKICAgIHBhdGgud3JpdGVfdGV4dCh0ZXh0LnJlcGxhY2UoYmFkLCBnb29kLCAxKSkK
-        run: |
-          printf '%s' "$PATCH_B64" | base64 --decode > /tmp/fix_regex.py
-          python3 /tmp/fix_regex.py
-          if ! git diff --quiet -- app/src/main/java/com/carlosvale/ytdownloader/MainActivity.kt; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add app/src/main/java/com/carlosvale/ytdownloader/MainActivity.kt
-            git commit -m "Fix Kotlin media fragment regex"
-            git push
-          fi
-
       - name: Build debug APKs for testing
         run: gradle :app:assembleDebug --stacktrace
 
@@ -52,3 +42,75 @@ jobs:
           name: GetMuvi-0.3.7-arm64-v8a-debug
           path: app/build/outputs/apk/debug/app-arm64-v8a-debug.apk
           if-no-files-found: error
+
+      - name: Check production signing configuration
+        id: signing
+        shell: bash
+        run: |
+          if [[ -n "$SIGNING_KEYSTORE_BASE64" && -n "$SIGNING_STORE_PASSWORD" && -n "$SIGNING_KEY_ALIAS" && -n "$SIGNING_KEY_PASSWORD" ]]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "Production signing secrets are configured."
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "Production signing secrets are not configured; signed release publishing will be skipped."
+          fi
+
+      - name: Materialize production keystore
+        if: steps.signing.outputs.ready == 'true'
+        shell: bash
+        run: |
+          KEYSTORE_PATH="$RUNNER_TEMP/getmuvi-upload.jks"
+          printf '%s' "$SIGNING_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
+          chmod 600 "$KEYSTORE_PATH"
+          echo "SIGNING_KEYSTORE_PATH=$KEYSTORE_PATH" >> "$GITHUB_ENV"
+
+      - name: Build signed release APKs and Play Store AAB
+        if: steps.signing.outputs.ready == 'true'
+        run: gradle :app:assembleRelease :app:bundleRelease --stacktrace
+
+      - name: Verify APK signature
+        if: steps.signing.outputs.ready == 'true'
+        shell: bash
+        run: |
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          "$APKSIGNER" verify --verbose --print-certs app/build/outputs/apk/release/app-arm64-v8a-release.apk
+          "$APKSIGNER" verify --verbose --print-certs app/build/outputs/apk/release/app-universal-release.apk
+
+      - name: Prepare signed distribution files
+        if: steps.signing.outputs.ready == 'true'
+        shell: bash
+        run: |
+          cp app/build/outputs/apk/release/app-arm64-v8a-release.apk GetMuvi-0.3.7-arm64-v8a.apk
+          cp app/build/outputs/apk/release/app-universal-release.apk GetMuvi-0.3.7-universal.apk
+          cp app/build/outputs/bundle/release/app-release.aab GetMuvi-0.3.7.aab
+          sha256sum GetMuvi-0.3.7-arm64-v8a.apk GetMuvi-0.3.7-universal.apk GetMuvi-0.3.7.aab > SHA256SUMS.txt
+
+      - name: Upload signed release artifacts
+        if: steps.signing.outputs.ready == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: GetMuvi-0.3.7-signed-release
+          path: |
+            GetMuvi-0.3.7-arm64-v8a.apk
+            GetMuvi-0.3.7-universal.apk
+            GetMuvi-0.3.7.aab
+            SHA256SUMS.txt
+          if-no-files-found: error
+
+      - name: Publish signed GitHub release
+        if: steps.signing.outputs.ready == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view v0.3.7 >/dev/null 2>&1; then
+            gh release upload v0.3.7 GetMuvi-0.3.7-arm64-v8a.apk GetMuvi-0.3.7-universal.apk GetMuvi-0.3.7.aab SHA256SUMS.txt --clobber
+          else
+            gh release create v0.3.7 \
+              GetMuvi-0.3.7-arm64-v8a.apk \
+              GetMuvi-0.3.7-universal.apk \
+              GetMuvi-0.3.7.aab \
+              SHA256SUMS.txt \
+              --title "GetMuvi 0.3.7" \
+              --notes "Corrige o caminho final do yt-dlp/FFmpeg, força temporários e mídia final para a mesma área e resgata o arquivo quando o mecanismo o move para outro local."
+          fi
