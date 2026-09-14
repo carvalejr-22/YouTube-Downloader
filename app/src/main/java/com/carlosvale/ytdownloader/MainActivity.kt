@@ -915,30 +915,80 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun exportToTree(context: Context, source: File, treeUri: Uri) {
-        val root = DocumentFile.fromTreeUri(context, treeUri) ?: error("Pasta selecionada indisponível")
+    val root = DocumentFile.fromTreeUri(context, treeUri)
+        ?: error("Pasta selecionada indisponível")
 
-        source.listFiles()?.filter { it.isFile }?.forEach { file ->
-            val mime = when (file.extension.lowercase(Locale.ROOT)) {
-                "mp3" -> "audio/mpeg"
-                "m4a" -> "audio/mp4"
-                "aac" -> "audio/aac"
-                "opus" -> "audio/opus"
-                "ogg" -> "audio/ogg"
-                "webm" -> if (file.name.contains("audio", ignoreCase = true)) "audio/webm" else "video/webm"
-                "mkv" -> "video/x-matroska"
-                else -> "video/mp4"
-            }
-
-            root.findFile(file.name)?.delete()
-            val target = root.createFile(mime, file.name) ?: error("Não foi possível criar ${file.name}")
-
-            context.contentResolver.openOutputStream(target.uri)?.use { output ->
-                file.inputStream().use { input -> input.copyTo(output) }
-            } ?: error("Não foi possível gravar ${file.name}")
+    val files = source.walkTopDown()
+        .filter { file ->
+            file.isFile &&
+                !file.name.endsWith(".part", ignoreCase = true) &&
+                !file.name.endsWith(".ytdl", ignoreCase = true)
         }
+        .toList()
+
+    if (files.isEmpty()) {
+        error("O download terminou, mas o arquivo final não foi encontrado para salvar na pasta escolhida.")
     }
 
-    private fun compactStatus(line: String): String {
+    files.forEach { file ->
+        val expectedBytes = file.length()
+        if (expectedBytes <= 0L) {
+            error("O arquivo ${file.name} foi gerado vazio e não será salvo.")
+        }
+
+        val mime = when (file.extension.lowercase(Locale.ROOT)) {
+            "mp3" -> "audio/mpeg"
+            "m4a" -> "audio/mp4"
+            "aac" -> "audio/aac"
+            "opus" -> "audio/opus"
+            "ogg" -> "audio/ogg"
+            "webm" -> if (file.name.contains("audio", ignoreCase = true)) "audio/webm" else "video/webm"
+            "mkv" -> "video/x-matroska"
+            else -> "video/mp4"
+        }
+
+        var copied = false
+        var lastError: Throwable? = null
+
+        for (attempt in 1..2) {
+            try {
+                root.findFile(file.name)?.delete()
+                val target = root.createFile(mime, file.name)
+                    ?: error("Não foi possível criar ${file.name}")
+
+                val copiedBytes = context.contentResolver.openOutputStream(target.uri, "w")?.use { output ->
+                    file.inputStream().use { input -> input.copyTo(output) }
+                } ?: error("Não foi possível gravar ${file.name}")
+
+                if (copiedBytes != expectedBytes) {
+                    target.delete()
+                    error("A cópia de ${file.name} ficou incompleta ($copiedBytes de $expectedBytes bytes).")
+                }
+
+                val savedBytes = target.length()
+                if (savedBytes > 0L && savedBytes != expectedBytes) {
+                    target.delete()
+                    error("A verificação de ${file.name} falhou após a cópia.")
+                }
+
+                copied = true
+                break
+            } catch (error: Throwable) {
+                lastError = error
+                if (attempt < 2) Thread.sleep(250)
+            }
+        }
+
+        if (!copied) {
+            throw IllegalStateException(
+                "Não foi possível salvar ${file.name} na pasta escolhida após 2 tentativas.",
+                lastError
+            )
+        }
+    }
+}
+
+private fun compactStatus(line: String): String {
         val clean = line.trim().replace(STATUS_WHITESPACE, " ")
         return if (clean.length <= 90) clean else clean.take(87) + "…"
     }

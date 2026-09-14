@@ -16,6 +16,21 @@ import kotlinx.coroutines.withContext
  */
 class YTDownloaderApp : Application() {
     private val initMutex = Mutex()
+
+    override fun onCreate() {
+        super.onCreate()
+        Thread({ cleanupStaleExports() }, "getmuvi-cache-cleanup").start()
+    }
+
+    private fun cleanupStaleExports() {
+        val cutoff = System.currentTimeMillis() - STALE_EXPORT_MAX_AGE_MS
+        cacheDir.listFiles()
+            ?.filter { it.isDirectory && it.name.startsWith("export-") && it.lastModified() < cutoff }
+            ?.forEach { dir ->
+                runCatching { dir.deleteRecursively() }
+                    .onFailure { Log.w(TAG, "Não foi possível limpar temporário antigo: ${dir.name}", it) }
+            }
+    }
     private val updateMutex = Mutex()
 
     @Volatile
@@ -92,6 +107,7 @@ class YTDownloaderApp : Application() {
     }
 
     private companion object {
-        const val TAG = "GetMuvi"
-    }
+    const val TAG = "GetMuvi"
+    const val STALE_EXPORT_MAX_AGE_MS = 60L * 60L * 1000L
+}
 }
