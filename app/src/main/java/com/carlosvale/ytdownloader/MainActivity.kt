@@ -959,7 +959,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             lowerName.endsWith(".part") ||
             lowerName.endsWith(".ytdl") ||
             lowerName.endsWith(".tmp") ||
-            Regex("\.f\d+\.[^.]+$").containsMatchIn(lowerName)
+            Regex("""\.f\d+\.[^.]+$""").containsMatchIn(lowerName)
         ) return false
 
         return file.extension.lowercase(Locale.ROOT) !in setOf(
