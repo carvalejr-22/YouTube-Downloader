@@ -173,6 +173,7 @@ private data class FormatDescriptor(
 
 private const val PROGRESS_UI_INTERVAL_MS = 250L
 private const val PROGRESS_UI_DELTA = 0.01f
+private const val FINAL_PATH_MARKER = "__GETMUVI_FINAL__"
 private val STATUS_WHITESPACE = Regex("\\s+")
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
@@ -707,8 +708,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
                 var lastUiUpdateAt = 0L
                 var lastUiProgress = -1f
+                var reportedFinalPath: String? = null
 
                 YoutubeDL.getInstance().execute(request, currentProcessId) { itemProgress, eta, line ->
+                    val markerIndex = line.indexOf(FINAL_PATH_MARKER)
+                    if (markerIndex >= 0) {
+                        reportedFinalPath = line.substring(markerIndex + FINAL_PATH_MARKER.length)
+                            .trim()
+                            .takeIf { it.isNotBlank() }
+                    }
+
                     val overallProgress = if (totalItems > 1) {
                         (completedBeforeThisItem + itemProgress.coerceIn(0f, 100f) / 100f) / totalItems.toFloat()
                     } else {
@@ -723,7 +732,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     if (shouldRefreshUi) {
                         lastUiUpdateAt = now
                         lastUiProgress = overallProgress
-                        val compactLine = if (line.isNotBlank()) compactStatus(line) else ""
+                        val compactLine = if (markerIndex < 0 && line.isNotBlank()) compactStatus(line) else ""
 
                         _state.value = _state.value.copy(
                             progress = overallProgress,
@@ -736,6 +745,31 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                             }
                         )
                     }
+                }
+
+                val reportedFile = reportedFinalPath?.let(::File)
+                if (reportedFile != null && reportedFile.isFile && reportedFile.length() > 0L) {
+                    val realSource = reportedFile.canonicalFile
+                    val realOutputDir = outputDir.canonicalFile
+                    if (!realSource.toPath().startsWith(realOutputDir.toPath())) {
+                        val rescued = File(outputDir, realSource.name)
+                        realSource.copyTo(rescued, overwrite = true)
+                        if (!rescued.isFile || rescued.length() != realSource.length()) {
+                            error("O arquivo final foi localizado, mas não pôde ser movido para a área temporária do GetMuvi.")
+                        }
+                    }
+                }
+
+                val templatePrefix = outputTemplate.substringBefore("%(").takeIf { it.isNotBlank() }
+                val finalFiles = outputDir.walkTopDown()
+                    .filter { file ->
+                        isExportableMediaFile(file) &&
+                            (templatePrefix == null || file.name.startsWith(templatePrefix))
+                    }
+                    .toList()
+
+                if (finalFiles.isEmpty()) {
+                    error("O mecanismo concluiu o processo, mas não entregou um arquivo de mídia final ao GetMuvi.")
                 }
                 Unit
             }
@@ -762,7 +796,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         restrictFilenames: Boolean
     ): YoutubeDLRequest {
         val request = YoutubeDLRequest(url)
-            .addOption("-o", File(outputDir, outputTemplate).absolutePath)
+            .addOption("--paths", "home:${outputDir.absolutePath}")
+            .addOption("--paths", "temp:${outputDir.absolutePath}")
+            .addOption("-o", outputTemplate)
+            .addOption("--print", "after_move:$FINAL_PATH_MARKER%(filepath)s")
             .addOption("--trim-filenames", "64")
             .addOption("--no-warnings")
             .addOption("--newline")
@@ -914,16 +951,28 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    private fun isExportableMediaFile(file: File): Boolean {
+        if (!file.isFile || file.length() <= 0L) return false
+
+        val lowerName = file.name.lowercase(Locale.ROOT)
+        if (
+            lowerName.endsWith(".part") ||
+            lowerName.endsWith(".ytdl") ||
+            lowerName.endsWith(".tmp") ||
+            Regex("\.f\d+\.[^.]+$").containsMatchIn(lowerName)
+        ) return false
+
+        return file.extension.lowercase(Locale.ROOT) !in setOf(
+            "json", "description", "jpg", "jpeg", "png", "webp", "vtt", "srt", "ass"
+        )
+    }
+
     private fun exportToTree(context: Context, source: File, treeUri: Uri) {
     val root = DocumentFile.fromTreeUri(context, treeUri)
         ?: error("Pasta selecionada indisponível")
 
     val files = source.walkTopDown()
-        .filter { file ->
-            file.isFile &&
-                !file.name.endsWith(".part", ignoreCase = true) &&
-                !file.name.endsWith(".ytdl", ignoreCase = true)
-        }
+        .filter(::isExportableMediaFile)
         .toList()
 
     if (files.isEmpty()) {
