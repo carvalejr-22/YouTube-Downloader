@@ -1,0 +1,162 @@
+name: Apply GetMuvi final path fix
+
+on:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.head_commit.message != 'Fix yt-dlp final media path handling'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          token: ${{ github.token }}
+
+      - name: Patch final path handling
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('app/src/main/java/com/carlosvale/ytdownloader/MainActivity.kt')
+          text = path.read_text()
+
+          text = text.replace(
+              'private const val PROGRESS_UI_DELTA = 0.01f\nprivate val STATUS_WHITESPACE = Regex("\\\\s+")',
+              'private const val PROGRESS_UI_DELTA = 0.01f\nprivate const val FINAL_PATH_MARKER = "__GETMUVI_FINAL__"\nprivate val STATUS_WHITESPACE = Regex("\\\\s+")'
+          )
+
+          old_request = '''        val request = YoutubeDLRequest(url)
+              .addOption("-o", File(outputDir, outputTemplate).absolutePath)
+              .addOption("--trim-filenames", "64")'''
+          new_request = '''        val request = YoutubeDLRequest(url)
+              .addOption("--paths", "home:${outputDir.absolutePath}")
+              .addOption("--paths", "temp:${outputDir.absolutePath}")
+              .addOption("-o", outputTemplate)
+              .addOption("--print", "after_move:$FINAL_PATH_MARKER%(filepath)s")
+              .addOption("--trim-filenames", "64")'''
+          if old_request not in text:
+              raise SystemExit('download request block not found')
+          text = text.replace(old_request, new_request, 1)
+
+          old_vars = '''                var lastUiUpdateAt = 0L
+                var lastUiProgress = -1f
+
+                YoutubeDL.getInstance().execute(request, currentProcessId) { itemProgress, eta, line ->
+                    val overallProgress = if (totalItems > 1) {'''
+          new_vars = '''                var lastUiUpdateAt = 0L
+                var lastUiProgress = -1f
+                var reportedFinalPath: String? = null
+
+                YoutubeDL.getInstance().execute(request, currentProcessId) { itemProgress, eta, line ->
+                    val markerIndex = line.indexOf(FINAL_PATH_MARKER)
+                    if (markerIndex >= 0) {
+                        reportedFinalPath = line.substring(markerIndex + FINAL_PATH_MARKER.length)
+                            .trim()
+                            .takeIf { it.isNotBlank() }
+                    }
+
+                    val overallProgress = if (totalItems > 1) {'''
+          if old_vars not in text:
+              raise SystemExit('progress callback block not found')
+          text = text.replace(old_vars, new_vars, 1)
+
+          old_compact = '''                        val compactLine = if (line.isNotBlank()) compactStatus(line) else ""'''
+          new_compact = '''                        val compactLine = if (markerIndex < 0 && line.isNotBlank()) compactStatus(line) else ""'''
+          if old_compact not in text:
+              raise SystemExit('compact line block not found')
+          text = text.replace(old_compact, new_compact, 1)
+
+          old_end = '''                }
+                Unit
+            }
+
+            processId = null'''
+          new_end = '''                }
+
+                val reportedFile = reportedFinalPath?.let(::File)
+                if (reportedFile != null && reportedFile.isFile && reportedFile.length() > 0L) {
+                    val realSource = reportedFile.canonicalFile
+                    val realOutputDir = outputDir.canonicalFile
+                    if (!realSource.toPath().startsWith(realOutputDir.toPath())) {
+                        val rescued = File(outputDir, realSource.name)
+                        realSource.copyTo(rescued, overwrite = true)
+                        if (!rescued.isFile || rescued.length() != realSource.length()) {
+                            error("O arquivo final foi localizado, mas não pôde ser movido para a área temporária do GetMuvi.")
+                        }
+                    }
+                }
+
+                val templatePrefix = outputTemplate.substringBefore("%(").takeIf { it.isNotBlank() }
+                val finalFiles = outputDir.walkTopDown()
+                    .filter { file ->
+                        isExportableMediaFile(file) &&
+                            (templatePrefix == null || file.name.startsWith(templatePrefix))
+                    }
+                    .toList()
+
+                if (finalFiles.isEmpty()) {
+                    error("O mecanismo concluiu o processo, mas não entregou um arquivo de mídia final ao GetMuvi.")
+                }
+                Unit
+            }
+
+            processId = null'''
+          if old_end not in text:
+              raise SystemExit('execute completion block not found')
+          text = text.replace(old_end, new_end, 1)
+
+          old_export_filter = '''        .filter { file ->
+            file.isFile &&
+                !file.name.endsWith(".part", ignoreCase = true) &&
+                !file.name.endsWith(".ytdl", ignoreCase = true)
+        }'''
+          new_export_filter = '''        .filter(::isExportableMediaFile)'''
+          if old_export_filter not in text:
+              raise SystemExit('export filter block not found')
+          text = text.replace(old_export_filter, new_export_filter, 1)
+
+          marker = '''    private fun exportToTree(context: Context, source: File, treeUri: Uri) {'''
+          helper = '''    private fun isExportableMediaFile(file: File): Boolean {
+        if (!file.isFile || file.length() <= 0L) return false
+
+        val lowerName = file.name.lowercase(Locale.ROOT)
+        if (
+            lowerName.endsWith(".part") ||
+            lowerName.endsWith(".ytdl") ||
+            lowerName.endsWith(".tmp") ||
+            Regex("\\\\.f\\\\d+\\\\.[^.]+$").containsMatchIn(lowerName)
+        ) return false
+
+        return file.extension.lowercase(Locale.ROOT) !in setOf(
+            "json", "description", "jpg", "jpeg", "png", "webp", "vtt", "srt", "ass"
+        )
+    }
+
+    private fun exportToTree(context: Context, source: File, treeUri: Uri) {'''
+          if marker not in text:
+              raise SystemExit('export function marker not found')
+          text = text.replace(marker, helper, 1)
+
+          path.write_text(text)
+
+          gradle = Path('app/build.gradle.kts')
+          g = gradle.read_text()
+          g = g.replace('versionCode = 12', 'versionCode = 13')
+          g = g.replace('versionName = "0.3.6"', 'versionName = "0.3.7"')
+          gradle.write_text(g)
+          PY
+
+      - name: Commit fix
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/carlosvale/ytdownloader/MainActivity.kt app/build.gradle.kts
+          git commit -m "Fix yt-dlp final media path handling"
+          git push
