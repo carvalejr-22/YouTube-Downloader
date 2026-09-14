@@ -1,5 +1,5 @@
 #define MyAppName "GetMuvi"
-#define MyAppVersion "0.1.1"
+#define MyAppVersion "0.1.2"
 #define MyAppPublisher "Carlos Vale Jr / GetMuvi"
 #define MyAppExeName "GetMuvi.exe"
 
@@ -16,7 +16,7 @@ DefaultDirName={autopf}\GetMuvi
 DefaultGroupName=GetMuvi
 DisableProgramGroupPage=yes
 OutputDir=installer-output
-OutputBaseFilename=GetMuvi-Setup-0.1.1
+OutputBaseFilename=GetMuvi-Setup-0.1.2
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
@@ -25,12 +25,12 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 SetupIconFile=assets\getmuvi.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
-VersionInfoVersion=0.1.1.0
+VersionInfoVersion=0.1.2.0
 VersionInfoCompany={#MyAppPublisher}
 VersionInfoDescription=Instalador oficial do GetMuvi
 VersionInfoCopyright=Copyright (C) 2026 Carlos Vale Jr
 VersionInfoProductName=GetMuvi
-VersionInfoProductVersion=0.1.1.0
+VersionInfoProductVersion=0.1.2.0
 
 [Languages]
 Name: "brazilianportuguese"; MessagesFile: "compiler:Languages\BrazilianPortuguese.isl"
