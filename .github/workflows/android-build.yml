@@ -12,11 +12,6 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    env:
-      SIGNING_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-      SIGNING_STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-      SIGNING_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-      SIGNING_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
 
     steps:
       - name: Checkout
@@ -33,18 +28,18 @@ jobs:
         with:
           gradle-version: '9.6.0'
 
-      - name: Apply 0.3.7 final media path fix when needed
+      - name: Fix Kotlin regex when needed
         shell: bash
         env:
-          PATCH_B64: ZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCgpncmFkbGUgPSBQYXRoKCJhcHAvYnVpbGQuZ3JhZGxlLmt0cyIpCmcgPSBncmFkbGUucmVhZF90ZXh0KCkKaWYgJ3ZlcnNpb25OYW1lID0gIjAuMy43IicgaW4gZzoKICAgIHJhaXNlIFN5c3RlbUV4aXQoMCkKCnBhdGggPSBQYXRoKCJhcHAvc3JjL21haW4vamF2YS9jb20vY2FybG9zdmFsZS95dGRvd25sb2FkZXIvTWFpbkFjdGl2aXR5Lmt0IikKdGV4dCA9IHBhdGgucmVhZF90ZXh0KCkKCmFuY2hvciA9ICdwcml2YXRlIGNvbnN0IHZhbCBQUk9HUkVTU19VSV9ERUxUQSA9IDAuMDFmXG5wcml2YXRlIHZhbCBTVEFUVVNfV0hJVEVTUEFDRSA9IFJlZ2V4KCJcXFxccysiKScKaWYgYW5jaG9yIG5vdCBpbiB0ZXh0OgogICAgcmFpc2UgU3lzdGVtRXhpdCgiY29uc3RhbnRzIGFuY2hvciBub3QgZm91bmQiKQp0ZXh0ID0gdGV4dC5yZXBsYWNlKAogICAgYW5jaG9yLAogICAgJ3ByaXZhdGUgY29uc3QgdmFsIFBST0dSRVNTX1VJX0RFTFRBID0gMC4wMWZcbnByaXZhdGUgY29uc3QgdmFsIEZJTkFMX1BBVEhfTUFSS0VSID0gIl9fR0VUTVVWSV9GSU5BTF9fIlxucHJpdmF0ZSB2YWwgU1RBVFVTX1dISVRFU1BBQ0UgPSBSZWdleCgiXFxcXHMrIiknLAogICAgMSwKKQoKb2xkX3JlcXVlc3QgPSAnJycgICAgICAgIHZhbCByZXF1ZXN0ID0gWW91dHViZURMUmVxdWVzdCh1cmwpCiAgICAgICAgICAgIC5hZGRPcHRpb24oIi1vIiwgRmlsZShvdXRwdXREaXIsIG91dHB1dFRlbXBsYXRlKS5hYnNvbHV0ZVBhdGgpCiAgICAgICAgICAgIC5hZGRPcHRpb24oIi0tdHJpbS1maWxlbmFtZXMiLCAiNjQiKScnJwpuZXdfcmVxdWVzdCA9ICcnJyAgICAgICAgdmFsIHJlcXVlc3QgPSBZb3V0dWJlRExSZXF1ZXN0KHVybCkKICAgICAgICAgICAgLmFkZE9wdGlvbigiLS1wYXRocyIsICJob21lOiR7b3V0cHV0RGlyLmFic29sdXRlUGF0aH0iKQogICAgICAgICAgICAuYWRkT3B0aW9uKCItLXBhdGhzIiwgInRlbXA6JHtvdXRwdXREaXIuYWJzb2x1dGVQYXRofSIpCiAgICAgICAgICAgIC5hZGRPcHRpb24oIi1vIiwgb3V0cHV0VGVtcGxhdGUpCiAgICAgICAgICAgIC5hZGRPcHRpb24oIi0tcHJpbnQiLCAiYWZ0ZXJfbW92ZTokRklOQUxfUEFUSF9NQVJLRVIlKGZpbGVwYXRoKXMiKQogICAgICAgICAgICAuYWRkT3B0aW9uKCItLXRyaW0tZmlsZW5hbWVzIiwgIjY0IiknJycKaWYgb2xkX3JlcXVlc3Qgbm90IGluIHRleHQ6CiAgICByYWlzZSBTeXN0ZW1FeGl0KCJkb3dubG9hZCByZXF1ZXN0IGJsb2NrIG5vdCBmb3VuZCIpCnRleHQgPSB0ZXh0LnJlcGxhY2Uob2xkX3JlcXVlc3QsIG5ld19yZXF1ZXN0LCAxKQoKb2xkX3ZhcnMgPSAnJycgICAgICAgICAgICAgICAgdmFyIGxhc3RVaVVwZGF0ZUF0ID0gMEwKICAgICAgICAgICAgICAgIHZhciBsYXN0VWlQcm9ncmVzcyA9IC0xZgoKICAgICAgICAgICAgICAgIFlvdXR1YmVETC5nZXRJbnN0YW5jZSgpLmV4ZWN1dGUocmVxdWVzdCwgY3VycmVudFByb2Nlc3NJZCkgeyBpdGVtUHJvZ3Jlc3MsIGV0YSwgbGluZSAtPgogICAgICAgICAgICAgICAgICAgIHZhbCBvdmVyYWxsUHJvZ3Jlc3MgPSBpZiAodG90YWxJdGVtcyA+IDEpIHsnJycKbmV3X3ZhcnMgPSAnJycgICAgICAgICAgICAgICAgdmFyIGxhc3RVaVVwZGF0ZUF0ID0gMEwKICAgICAgICAgICAgICAgIHZhciBsYXN0VWlQcm9ncmVzcyA9IC0xZgogICAgICAgICAgICAgICAgdmFyIHJlcG9ydGVkRmluYWxQYXRoOiBTdHJpbmc/ID0gbnVsbAoKICAgICAgICAgICAgICAgIFlvdXR1YmVETC5nZXRJbnN0YW5jZSgpLmV4ZWN1dGUocmVxdWVzdCwgY3VycmVudFByb2Nlc3NJZCkgeyBpdGVtUHJvZ3Jlc3MsIGV0YSwgbGluZSAtPgogICAgICAgICAgICAgICAgICAgIHZhbCBtYXJrZXJJbmRleCA9IGxpbmUuaW5kZXhPZihGSU5BTF9QQVRIX01BUktFUikKICAgICAgICAgICAgICAgICAgICBpZiAobWFya2VySW5kZXggPj0gMCkgewogICAgICAgICAgICAgICAgICAgICAgICByZXBvcnRlZEZpbmFsUGF0aCA9IGxpbmUuc3Vic3RyaW5nKG1hcmtlckluZGV4ICsgRklOQUxfUEFUSF9NQVJLRVIubGVuZ3RoKQogICAgICAgICAgICAgICAgICAgICAgICAgICAgLnRyaW0oKQogICAgICAgICAgICAgICAgICAgICAgICAgICAgLnRha2VJZiB7IGl0LmlzTm90QmxhbmsoKSB9CiAgICAgICAgICAgICAgICAgICAgfQoKICAgICAgICAgICAgICAgICAgICB2YWwgb3ZlcmFsbFByb2dyZXNzID0gaWYgKHRvdGFsSXRlbXMgPiAxKSB7JycnCmlmIG9sZF92YXJzIG5vdCBpbiB0ZXh0OgogICAgcmFpc2UgU3lzdGVtRXhpdCgicHJvZ3Jlc3MgY2FsbGJhY2sgYmxvY2sgbm90IGZvdW5kIikKdGV4dCA9IHRleHQucmVwbGFjZShvbGRfdmFycywgbmV3X3ZhcnMsIDEpCgpvbGRfY29tcGFjdCA9ICcgICAgICAgICAgICAgICAgICAgICAgICB2YWwgY29tcGFjdExpbmUgPSBpZiAobGluZS5pc05vdEJsYW5rKCkpIGNvbXBhY3RTdGF0dXMobGluZSkgZWxzZSAiIicKbmV3X2NvbXBhY3QgPSAnICAgICAgICAgICAgICAgICAgICAgICAgdmFsIGNvbXBhY3RMaW5lID0gaWYgKG1hcmtlckluZGV4IDwgMCAmJiBsaW5lLmlzTm90QmxhbmsoKSkgY29tcGFjdFN0YXR1cyhsaW5lKSBlbHNlICIiJwppZiBvbGRfY29tcGFjdCBub3QgaW4gdGV4dDoKICAgIHJhaXNlIFN5c3RlbUV4aXQoImNvbXBhY3Qgc3RhdHVzIGJsb2NrIG5vdCBmb3VuZCIpCnRleHQgPSB0ZXh0LnJlcGxhY2Uob2xkX2NvbXBhY3QsIG5ld19jb21wYWN0LCAxKQoKb2xkX2VuZCA9ICcnJyAgICAgICAgICAgICAgICB9CiAgICAgICAgICAgICAgICBVbml0CiAgICAgICAgICAgIH0KCiAgICAgICAgICAgIHByb2Nlc3NJZCA9IG51bGwnJycKbmV3X2VuZCA9ICcnJyAgICAgICAgICAgICAgICB9CgogICAgICAgICAgICAgICAgdmFsIHJlcG9ydGVkRmlsZSA9IHJlcG9ydGVkRmluYWxQYXRoPy5sZXQoOjpGaWxlKQogICAgICAgICAgICAgICAgaWYgKHJlcG9ydGVkRmlsZSAhPSBudWxsICYmIHJlcG9ydGVkRmlsZS5pc0ZpbGUgJiYgcmVwb3J0ZWRGaWxlLmxlbmd0aCgpID4gMEwpIHsKICAgICAgICAgICAgICAgICAgICB2YWwgcmVhbFNvdXJjZSA9IHJlcG9ydGVkRmlsZS5jYW5vbmljYWxGaWxlCiAgICAgICAgICAgICAgICAgICAgdmFsIHJlYWxPdXRwdXREaXIgPSBvdXRwdXREaXIuY2Fub25pY2FsRmlsZQogICAgICAgICAgICAgICAgICAgIGlmICghcmVhbFNvdXJjZS50b1BhdGgoKS5zdGFydHNXaXRoKHJlYWxPdXRwdXREaXIudG9QYXRoKCkpKSB7CiAgICAgICAgICAgICAgICAgICAgICAgIHZhbCByZXNjdWVkID0gRmlsZShvdXRwdXREaXIsIHJlYWxTb3VyY2UubmFtZSkKICAgICAgICAgICAgICAgICAgICAgICAgcmVhbFNvdXJjZS5jb3B5VG8ocmVzY3VlZCwgb3ZlcndyaXRlID0gdHJ1ZSkKICAgICAgICAgICAgICAgICAgICAgICAgaWYgKCFyZXNjdWVkLmlzRmlsZSB8fCByZXNjdWVkLmxlbmd0aCgpICE9IHJlYWxTb3VyY2UubGVuZ3RoKCkpIHsKICAgICAgICAgICAgICAgICAgICAgICAgICAgIGVycm9yKCJPIGFycXVpdm8gZmluYWwgZm9pIGxvY2FsaXphZG8sIG1hcyBuw6NvIHDDtGRlIHNlciBtb3ZpZG8gcGFyYSBhIMOhcmVhIHRlbXBvcsOhcmlhIGRvIEdldE11dmkuIikKICAgICAgICAgICAgICAgICAgICAgICAgfQogICAgICAgICAgICAgICAgICAgIH0KICAgICAgICAgICAgICAgIH0KCiAgICAgICAgICAgICAgICB2YWwgdGVtcGxhdGVQcmVmaXggPSBvdXRwdXRUZW1wbGF0ZS5zdWJzdHJpbmdCZWZvcmUoIiUoIikudGFrZUlmIHsgaXQuaXNOb3RCbGFuaygpIH0KICAgICAgICAgICAgICAgIHZhbCBmaW5hbEZpbGVzID0gb3V0cHV0RGlyLndhbGtUb3BEb3duKCkKICAgICAgICAgICAgICAgICAgICAuZmlsdGVyIHsgZmlsZSAtPgogICAgICAgICAgICAgICAgICAgICAgICBpc0V4cG9ydGFibGVNZWRpYUZpbGUoZmlsZSkgJiYKICAgICAgICAgICAgICAgICAgICAgICAgICAgICh0ZW1wbGF0ZVByZWZpeCA9PSBudWxsIHx8IGZpbGUubmFtZS5zdGFydHNXaXRoKHRlbXBsYXRlUHJlZml4KSkKICAgICAgICAgICAgICAgICAgICB9CiAgICAgICAgICAgICAgICAgICAgLnRvTGlzdCgpCgogICAgICAgICAgICAgICAgaWYgKGZpbmFsRmlsZXMuaXNFbXB0eSgpKSB7CiAgICAgICAgICAgICAgICAgICAgZXJyb3IoIk8gbWVjYW5pc21vIGNvbmNsdWl1IG8gcHJvY2Vzc28sIG1hcyBuw6NvIGVudHJlZ291IHVtIGFycXVpdm8gZGUgbcOtZGlhIGZpbmFsIGFvIEdldE11dmkuIikKICAgICAgICAgICAgICAgIH0KICAgICAgICAgICAgICAgIFVuaXQKICAgICAgICAgICAgfQoKICAgICAgICAgICAgcHJvY2Vzc0lkID0gbnVsbCcnJwppZiBvbGRfZW5kIG5vdCBpbiB0ZXh0OgogICAgcmFpc2UgU3lzdGVtRXhpdCgiZXhlY3V0ZSBjb21wbGV0aW9uIGJsb2NrIG5vdCBmb3VuZCIpCnRleHQgPSB0ZXh0LnJlcGxhY2Uob2xkX2VuZCwgbmV3X2VuZCwgMSkKCm9sZF9leHBvcnRfZmlsdGVyID0gJycnICAgICAgICAuZmlsdGVyIHsgZmlsZSAtPgogICAgICAgICAgICBmaWxlLmlzRmlsZSAmJgogICAgICAgICAgICAgICAgIWZpbGUubmFtZS5lbmRzV2l0aCgiLnBhcnQiLCBpZ25vcmVDYXNlID0gdHJ1ZSkgJiYKICAgICAgICAgICAgICAgICFmaWxlLm5hbWUuZW5kc1dpdGgoIi55dGRsIiwgaWdub3JlQ2FzZSA9IHRydWUpCiAgICAgICAgfScnJwppZiBvbGRfZXhwb3J0X2ZpbHRlciBub3QgaW4gdGV4dDoKICAgIHJhaXNlIFN5c3RlbUV4aXQoImV4cG9ydCBmaWx0ZXIgYmxvY2sgbm90IGZvdW5kIikKdGV4dCA9IHRleHQucmVwbGFjZShvbGRfZXhwb3J0X2ZpbHRlciwgJyAgICAgICAgLmZpbHRlcig6OmlzRXhwb3J0YWJsZU1lZGlhRmlsZSknLCAxKQoKbWFya2VyID0gJyAgICBwcml2YXRlIGZ1biBleHBvcnRUb1RyZWUoY29udGV4dDogQ29udGV4dCwgc291cmNlOiBGaWxlLCB0cmVlVXJpOiBVcmkpIHsnCmhlbHBlciA9ICcnJyAgICBwcml2YXRlIGZ1biBpc0V4cG9ydGFibGVNZWRpYUZpbGUoZmlsZTogRmlsZSk6IEJvb2xlYW4gewogICAgICAgIGlmICghZmlsZS5pc0ZpbGUgfHwgZmlsZS5sZW5ndGgoKSA8PSAwTCkgcmV0dXJuIGZhbHNlCgogICAgICAgIHZhbCBsb3dlck5hbWUgPSBmaWxlLm5hbWUubG93ZXJjYXNlKExvY2FsZS5ST09UKQogICAgICAgIGlmICgKICAgICAgICAgICAgbG93ZXJOYW1lLmVuZHNXaXRoKCIucGFydCIpIHx8CiAgICAgICAgICAgIGxvd2VyTmFtZS5lbmRzV2l0aCgiLnl0ZGwiKSB8fAogICAgICAgICAgICBsb3dlck5hbWUuZW5kc1dpdGgoIi50bXAiKSB8fAogICAgICAgICAgICBSZWdleCgiXFwuZlxcZCtcXC5bXi5dKyQiKS5jb250YWluc01hdGNoSW4obG93ZXJOYW1lKQogICAgICAgICkgcmV0dXJuIGZhbHNlCgogICAgICAgIHJldHVybiBmaWxlLmV4dGVuc2lvbi5sb3dlcmNhc2UoTG9jYWxlLlJPT1QpICFpbiBzZXRPZigKICAgICAgICAgICAgImpzb24iLCAiZGVzY3JpcHRpb24iLCAianBnIiwgImpwZWciLCAicG5nIiwgIndlYnAiLCAidnR0IiwgInNydCIsICJhc3MiCiAgICAgICAgKQogICAgfQoKICAgIHByaXZhdGUgZnVuIGV4cG9ydFRvVHJlZShjb250ZXh0OiBDb250ZXh0LCBzb3VyY2U6IEZpbGUsIHRyZWVVcmk6IFVyaSkgeycnJwppZiBtYXJrZXIgbm90IGluIHRleHQ6CiAgICByYWlzZSBTeXN0ZW1FeGl0KCJleHBvcnQgZnVuY3Rpb24gbWFya2VyIG5vdCBmb3VuZCIpCnRleHQgPSB0ZXh0LnJlcGxhY2UobWFya2VyLCBoZWxwZXIsIDEpCnBhdGgud3JpdGVfdGV4dCh0ZXh0KQoKZyA9IGcucmVwbGFjZSgidmVyc2lvbkNvZGUgPSAxMiIsICJ2ZXJzaW9uQ29kZSA9IDEzIikKZyA9IGcucmVwbGFjZSgndmVyc2lvbk5hbWUgPSAiMC4zLjYiJywgJ3ZlcnNpb25OYW1lID0gIjAuMy43IicpCmdyYWRsZS53cml0ZV90ZXh0KGcpCg==
+          PATCH_B64: ZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCnBhdGggPSBQYXRoKCJhcHAvc3JjL21haW4vamF2YS9jb20vY2FybG9zdmFsZS95dGRvd25sb2FkZXIvTWFpbkFjdGl2aXR5Lmt0IikKdGV4dCA9IHBhdGgucmVhZF90ZXh0KCkKYmFkID0gcidSZWdleCgiXC5mXGQrXC5bXi5dKyQiKScKZ29vZCA9IHInUmVnZXgoIiIiXC5mXGQrXC5bXi5dKyQiIiIpJwppZiBiYWQgaW4gdGV4dDoKICAgIHBhdGgud3JpdGVfdGV4dCh0ZXh0LnJlcGxhY2UoYmFkLCBnb29kLCAxKSkK
         run: |
-          printf '%s' "$PATCH_B64" | base64 --decode > /tmp/getmuvi_patch.py
-          python3 /tmp/getmuvi_patch.py
-          if ! git diff --quiet -- app/src/main/java/com/carlosvale/ytdownloader/MainActivity.kt app/build.gradle.kts; then
+          printf '%s' "$PATCH_B64" | base64 --decode > /tmp/fix_regex.py
+          python3 /tmp/fix_regex.py
+          if ! git diff --quiet -- app/src/main/java/com/carlosvale/ytdownloader/MainActivity.kt; then
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add app/src/main/java/com/carlosvale/ytdownloader/MainActivity.kt app/build.gradle.kts
-            git commit -m "Fix yt-dlp final media path handling"
+            git add app/src/main/java/com/carlosvale/ytdownloader/MainActivity.kt
+            git commit -m "Fix Kotlin media fragment regex"
             git push
           fi
 
@@ -57,75 +52,3 @@ jobs:
           name: GetMuvi-0.3.7-arm64-v8a-debug
           path: app/build/outputs/apk/debug/app-arm64-v8a-debug.apk
           if-no-files-found: error
-
-      - name: Check production signing configuration
-        id: signing
-        shell: bash
-        run: |
-          if [[ -n "$SIGNING_KEYSTORE_BASE64" && -n "$SIGNING_STORE_PASSWORD" && -n "$SIGNING_KEY_ALIAS" && -n "$SIGNING_KEY_PASSWORD" ]]; then
-            echo "ready=true" >> "$GITHUB_OUTPUT"
-            echo "Production signing secrets are configured."
-          else
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "Production signing secrets are not configured; signed release publishing will be skipped."
-          fi
-
-      - name: Materialize production keystore
-        if: steps.signing.outputs.ready == 'true'
-        shell: bash
-        run: |
-          KEYSTORE_PATH="$RUNNER_TEMP/getmuvi-upload.jks"
-          printf '%s' "$SIGNING_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
-          chmod 600 "$KEYSTORE_PATH"
-          echo "SIGNING_KEYSTORE_PATH=$KEYSTORE_PATH" >> "$GITHUB_ENV"
-
-      - name: Build signed release APKs and Play Store AAB
-        if: steps.signing.outputs.ready == 'true'
-        run: gradle :app:assembleRelease :app:bundleRelease --stacktrace
-
-      - name: Verify APK signature
-        if: steps.signing.outputs.ready == 'true'
-        shell: bash
-        run: |
-          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
-          "$APKSIGNER" verify --verbose --print-certs app/build/outputs/apk/release/app-arm64-v8a-release.apk
-          "$APKSIGNER" verify --verbose --print-certs app/build/outputs/apk/release/app-universal-release.apk
-
-      - name: Prepare signed distribution files
-        if: steps.signing.outputs.ready == 'true'
-        shell: bash
-        run: |
-          cp app/build/outputs/apk/release/app-arm64-v8a-release.apk GetMuvi-0.3.7-arm64-v8a.apk
-          cp app/build/outputs/apk/release/app-universal-release.apk GetMuvi-0.3.7-universal.apk
-          cp app/build/outputs/bundle/release/app-release.aab GetMuvi-0.3.7.aab
-          sha256sum GetMuvi-0.3.7-arm64-v8a.apk GetMuvi-0.3.7-universal.apk GetMuvi-0.3.7.aab > SHA256SUMS.txt
-
-      - name: Upload signed release artifacts
-        if: steps.signing.outputs.ready == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: GetMuvi-0.3.7-signed-release
-          path: |
-            GetMuvi-0.3.7-arm64-v8a.apk
-            GetMuvi-0.3.7-universal.apk
-            GetMuvi-0.3.7.aab
-            SHA256SUMS.txt
-          if-no-files-found: error
-
-      - name: Publish signed GitHub release
-        if: steps.signing.outputs.ready == 'true'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if gh release view v0.3.7 >/dev/null 2>&1; then
-            gh release upload v0.3.7 GetMuvi-0.3.7-arm64-v8a.apk GetMuvi-0.3.7-universal.apk GetMuvi-0.3.7.aab SHA256SUMS.txt --clobber
-          else
-            gh release create v0.3.7 \
-              GetMuvi-0.3.7-arm64-v8a.apk \
-              GetMuvi-0.3.7-universal.apk \
-              GetMuvi-0.3.7.aab \
-              SHA256SUMS.txt \
-              --title "GetMuvi 0.3.7" \
-              --notes "Corrige o caminho final do yt-dlp/FFmpeg, força temporários e mídia final para a mesma área e resgata o arquivo quando o mecanismo o move para outro local."
-          fi
