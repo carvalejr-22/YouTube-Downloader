@@ -1,5 +1,5 @@
 #define MyAppName "GetMuvi"
-#define MyAppVersion "0.1.3"
+#define MyAppVersion "0.1.4"
 #define MyAppPublisher "Carlos Vale Jr / GetMuvi"
 #define MyAppExeName "GetMuvi.exe"
 
@@ -18,7 +18,7 @@ DisableProgramGroupPage=yes
 DisableDirPage=auto
 UsePreviousAppDir=yes
 OutputDir=installer-output
-OutputBaseFilename=GetMuvi-Setup-0.1.3
+OutputBaseFilename=GetMuvi-Setup-0.1.4
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
@@ -28,12 +28,12 @@ ArchitecturesInstallIn64BitMode=x64compatible
 SetupIconFile=assets\getmuvi.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 UninstallDisplayName=GetMuvi
-VersionInfoVersion=0.1.3.0
+VersionInfoVersion=0.1.4.0
 VersionInfoCompany={#MyAppPublisher}
 VersionInfoDescription=Instalador oficial do GetMuvi
 VersionInfoCopyright=Copyright (C) 2026 Carlos Vale Jr
 VersionInfoProductName=GetMuvi
-VersionInfoProductVersion=0.1.3.0
+VersionInfoProductVersion=0.1.4.0
 SetupMutex=GetMuvi-Setup-A713CD2A-58CA-4E68-9AD6-849D74E89C8B
 CloseApplications=yes
 RestartApplications=no
