@@ -3,6 +3,17 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val releaseKeystorePath = System.getenv("SIGNING_KEYSTORE_PATH")
+val releaseStorePassword = System.getenv("SIGNING_STORE_PASSWORD")
+val releaseKeyAlias = System.getenv("SIGNING_KEY_ALIAS")
+val releaseKeyPassword = System.getenv("SIGNING_KEY_PASSWORD")
+val releaseSigningAvailable = listOf(
+    releaseKeystorePath,
+    releaseStorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword
+).all { !it.isNullOrBlank() }
+
 android {
     namespace = "com.carlosvale.ytdownloader"
     compileSdk = 37
@@ -11,8 +22,8 @@ android {
         applicationId = "com.carlosvale.ytdownloader"
         minSdk = 26
         targetSdk = 36
-        versionCode = 10
-        versionName = "0.3.4"
+        versionCode = 11
+        versionName = "0.3.5"
     }
 
     buildFeatures {
@@ -22,6 +33,19 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    // A chave de produção nunca fica no repositório. No CI ela é fornecida
+    // por GitHub Actions Secrets e materializada apenas durante o build.
+    if (releaseSigningAvailable) {
+        signingConfigs {
+            create("release") {
+                storeFile = file(releaseKeystorePath!!)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
     }
 
     // O motor Python/FFmpeg representa a maior parte do APK. Gerar um APK
@@ -44,6 +68,9 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            if (releaseSigningAvailable) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 
