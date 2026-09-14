@@ -71,6 +71,19 @@ replacement2 = '        self.message_frame.grid(row=3, column=0, sticky="ew", pa
 if needle2 in text:
     text = text.replace(needle2, replacement2, 1)
 
+# Mensagens continuam visíveis mesmo quando a área de resultados usa a linha 3.
+needle3 = '        self.success_label.configure(text="Download concluído com sucesso." if final_file is not None else "Download concluído. Abra a pasta para ver o arquivo.")\n        self.success_card.grid()'
+replacement3 = '        self.success_label.configure(text="Download concluído com sucesso." if final_file is not None else "Download concluído. Abra a pasta para ver o arquivo.")\n        self.message_frame.grid(row=3, column=0, sticky="ew", pady=(0, 8))\n        self.success_card.grid()'
+if needle3 not in text:
+    raise SystemExit("Trecho de sucesso esperado não encontrado.")
+text = text.replace(needle3, replacement3, 1)
+
+needle4 = '    def _show_error(self, message: str) -> None:\n        self.error_label.configure(text=message)\n        self.error_card.grid()'
+replacement4 = '    def _show_error(self, message: str) -> None:\n        self.error_label.configure(text=message)\n        if self.media_info is None:\n            self.message_frame.grid(row=3, column=0, sticky="ew", pady=(0, 8))\n        else:\n            self.content.grid_rowconfigure(4, weight=0)\n            self.message_frame.grid(row=4, column=0, sticky="ew", pady=(6, 0))\n        self.error_card.grid()'
+if needle4 not in text:
+    raise SystemExit("Trecho de erro esperado não encontrado.")
+text = text.replace(needle4, replacement4, 1)
+
 # Janela padrão um pouco mais compacta; segue redimensionável.
 text = text.replace('        self.geometry("1040x720")\n        self.minsize(860, 620)',
                     '        self.geometry("1040x690")\n        self.minsize(780, 590)', 1)
