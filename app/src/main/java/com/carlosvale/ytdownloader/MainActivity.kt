@@ -163,7 +163,20 @@ private data class DownloadAttempt(
     val label: String,
     val playerClients: String? = null,
     val compatibilityMode: Boolean = false,
-    val restrictFilenames: Boolean = false
+    val restrictFilenames: Boolean = false,
+    val requestUrl: String? = null,
+    val browserProfile: BrowserProfile? = null
+)
+
+private data class BrowserProfile(
+    val userAgent: String,
+    val referer: String
+)
+
+private data class ExtractionRoute(
+    val label: String,
+    val url: String,
+    val browserProfile: BrowserProfile? = null
 )
 
 private data class FormatDescriptor(
@@ -175,6 +188,20 @@ private const val PROGRESS_UI_INTERVAL_MS = 250L
 private const val PROGRESS_UI_DELTA = 0.01f
 private const val FINAL_PATH_MARKER = "__GETMUVI_FINAL__"
 private val STATUS_WHITESPACE = Regex("\\s+")
+private val FACEBOOK_VIDEO_ID_PATTERNS = listOf(
+    Regex("(?i)(?:facebook:|videos/|video_id[=/:]|[?&]v=)(\\d{8,})"),
+    Regex("(?i)\\b(\\d{12,})\\b")
+)
+private val FACEBOOK_DESKTOP_PROFILE = BrowserProfile(
+    userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+        "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
+    referer = "https://www.facebook.com/"
+)
+private val FACEBOOK_MOBILE_PROFILE = BrowserProfile(
+    userAgent = "Mozilla/5.0 (Linux; Android 16; Mobile) AppleWebKit/537.36 " +
+        "(KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36",
+    referer = "https://m.facebook.com/"
+)
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _state = MutableStateFlow(UiState())
@@ -215,21 +242,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 app.ensureDownloaderReady()
                 _state.value = _state.value.copy(status = "Analisando mídia e formatos…")
 
-                val request = YoutubeDLRequest(cleanUrl)
-                    .addOption("--dump-single-json")
-                    .addOption("--flat-playlist")
-                    .addOption("--skip-download")
-                    .addOption("--no-warnings")
-                    .addOption("--yes-playlist")
-
-                if (isYouTubeUrl(cleanUrl)) {
-                    request.addOption(
-                        "--extractor-args",
-                        "youtube:player_client=default,web_embedded,tv_downgraded"
-                    )
-                }
-
-                val output = YoutubeDL.getInstance().execute(request).out.trim()
+                val output = executeAnalysisWithFallback(cleanUrl)
                 val json = JSONObject(output)
                 val entriesArray = json.optJSONArray("entries")
                 val playlistEntries = mutableListOf<PlaylistEntry>()
@@ -269,6 +282,52 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 )
             }
         }
+    }
+
+    private fun executeAnalysisWithFallback(url: String): String {
+        val routes = extractionRoutes(url).toMutableList()
+        var finalError: Throwable? = null
+        var routeIndex = 0
+
+        while (routeIndex < routes.size) {
+            val route = routes[routeIndex++]
+            if (routeIndex > 1) {
+                _state.value = _state.value.copy(status = "Tentando ${route.label}…")
+            }
+
+            val result = runCatching {
+                val request = YoutubeDLRequest(route.url)
+                    .addOption("--dump-single-json")
+                    .addOption("--flat-playlist")
+                    .addOption("--skip-download")
+                    .addOption("--no-warnings")
+                    .addOption("--yes-playlist")
+
+                if (isYouTubeUrl(route.url)) {
+                    request.addOption(
+                        "--extractor-args",
+                        "youtube:player_client=default,web_embedded,tv_downgraded"
+                    )
+                }
+                addBrowserProfile(request, route.browserProfile)
+                YoutubeDL.getInstance().execute(request).out.trim()
+            }
+
+            if (result.isSuccess) return result.getOrThrow()
+
+            val error = result.exceptionOrNull() ?: RuntimeException("Falha ao analisar a mídia")
+            finalError = error
+            if (isFacebookUrl(url)) {
+                val videoId = extractFacebookVideoId(error.message.orEmpty())
+                if (videoId != null) {
+                    facebookCanonicalRoutes(videoId).forEach { candidate ->
+                        if (routes.none { it.url == candidate.url }) routes += candidate
+                    }
+                }
+            }
+        }
+
+        throw finalError ?: RuntimeException("Falha ao analisar a mídia")
     }
 
     private fun buildDownloadOptions(formatsArray: JSONArray?, isPlaylist: Boolean): List<DownloadOption> {
@@ -633,7 +692,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         itemNumber: Int,
         itemTitle: String
     ): Result<Unit> {
-        val attempts = if (isYouTubeUrl(url)) {
+        val attempts = (if (isYouTubeUrl(url)) {
             listOf(
                 DownloadAttempt("rota padrão"),
                 DownloadAttempt(
@@ -652,6 +711,35 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     restrictFilenames = true
                 )
             )
+        } else if (isFacebookUrl(url)) {
+            val routes = extractionRoutes(url)
+            buildList {
+                routes.forEach { route ->
+                    add(
+                        DownloadAttempt(
+                            label = route.label,
+                            requestUrl = route.url,
+                            browserProfile = route.browserProfile
+                        )
+                    )
+                    add(
+                        DownloadAttempt(
+                            label = "${route.label} em modo compatibilidade",
+                            compatibilityMode = true,
+                            requestUrl = route.url,
+                            browserProfile = route.browserProfile
+                        )
+                    )
+                }
+                add(
+                    DownloadAttempt(
+                        label = "nome seguro",
+                        compatibilityMode = true,
+                        restrictFilenames = true,
+                        browserProfile = FACEBOOK_MOBILE_PROFILE
+                    )
+                )
+            }
         } else {
             listOf(
                 DownloadAttempt("rota padrão"),
@@ -665,11 +753,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     restrictFilenames = true
                 )
             )
-        }
+        }).toMutableList()
 
         var finalError: Throwable? = null
 
-        for ((attemptIndex, attempt) in attempts.withIndex()) {
+        var attemptIndex = 0
+        while (attemptIndex < attempts.size) {
+            val attempt = attempts[attemptIndex]
             if (cancelRequested || !_state.value.downloading) {
                 return Result.failure(RuntimeException("Download cancelado"))
             }
@@ -697,13 +787,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
             val result = runCatching {
                 val request = buildDownloadRequest(
-                    url = url,
+                    url = attempt.requestUrl ?: url,
                     option = option,
                     outputDir = outputDir,
                     outputTemplate = outputTemplate,
                     playerClients = attempt.playerClients,
                     compatibilityMode = attempt.compatibilityMode,
-                    restrictFilenames = attempt.restrictFilenames
+                    restrictFilenames = attempt.restrictFilenames,
+                    browserProfile = attempt.browserProfile
                 )
 
                 var lastUiUpdateAt = 0L
@@ -780,7 +871,27 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
             val error = result.exceptionOrNull() ?: RuntimeException("Falha no download")
             finalError = error
+            if (isFacebookUrl(url)) {
+                extractFacebookVideoId(error.message.orEmpty())?.let { videoId ->
+                    facebookCanonicalRoutes(videoId).forEach { route ->
+                        if (attempts.none { it.requestUrl == route.url }) {
+                            attempts += DownloadAttempt(
+                                label = route.label,
+                                requestUrl = route.url,
+                                browserProfile = route.browserProfile
+                            )
+                            attempts += DownloadAttempt(
+                                label = "${route.label} em modo compatibilidade",
+                                compatibilityMode = true,
+                                requestUrl = route.url,
+                                browserProfile = route.browserProfile
+                            )
+                        }
+                    }
+                }
+            }
             if (!isRetryableDownloadError(error) || attemptIndex == attempts.lastIndex) break
+            attemptIndex++
         }
 
         return Result.failure(finalError ?: RuntimeException("Falha no download"))
@@ -793,7 +904,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         outputTemplate: String,
         playerClients: String?,
         compatibilityMode: Boolean,
-        restrictFilenames: Boolean
+        restrictFilenames: Boolean,
+        browserProfile: BrowserProfile?
     ): YoutubeDLRequest {
         val request = YoutubeDLRequest(url)
             .addOption("--paths", "home:${outputDir.absolutePath}")
@@ -809,6 +921,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
         if (restrictFilenames) request.addOption("--restrict-filenames")
         if (playerClients != null) request.addOption("--extractor-args", "youtube:player_client=$playerClients")
+        addBrowserProfile(request, browserProfile)
 
         when (option.type) {
             DownloadType.BEST_AV -> {
@@ -911,6 +1024,58 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    private fun extractionRoutes(url: String): List<ExtractionRoute> {
+        if (!isFacebookUrl(url)) return listOf(ExtractionRoute("rota padrão", url))
+
+        val uri = Uri.parse(url)
+        val pathAndQuery = buildString {
+            append(uri.encodedPath.orEmpty().ifBlank { "/" })
+            uri.encodedQuery?.let { append('?').append(it) }
+        }
+        val routes = mutableListOf(
+            ExtractionRoute("rota pública padrão", url, FACEBOOK_DESKTOP_PROFILE),
+            ExtractionRoute("rota móvel pública", "https://m.facebook.com$pathAndQuery", FACEBOOK_MOBILE_PROFILE),
+            ExtractionRoute("rota básica pública", "https://mbasic.facebook.com$pathAndQuery", FACEBOOK_MOBILE_PROFILE)
+        )
+        extractFacebookVideoId(url)?.let { routes += facebookCanonicalRoutes(it) }
+        return routes.distinctBy { it.url }
+    }
+
+    private fun facebookCanonicalRoutes(videoId: String): List<ExtractionRoute> = listOf(
+        ExtractionRoute(
+            "endereço canônico do vídeo",
+            "https://www.facebook.com/watch/?v=$videoId",
+            FACEBOOK_DESKTOP_PROFILE
+        ),
+        ExtractionRoute(
+            "endereço móvel canônico",
+            "https://m.facebook.com/watch/?v=$videoId",
+            FACEBOOK_MOBILE_PROFILE
+        ),
+        ExtractionRoute(
+            "endereço alternativo do vídeo",
+            "https://www.facebook.com/video.php?v=$videoId",
+            FACEBOOK_DESKTOP_PROFILE
+        )
+    )
+
+    private fun extractFacebookVideoId(text: String): String? =
+        FACEBOOK_VIDEO_ID_PATTERNS.firstNotNullOfOrNull { pattern ->
+            pattern.find(text)?.groupValues?.getOrNull(1)
+        }
+
+    private fun addBrowserProfile(request: YoutubeDLRequest, profile: BrowserProfile?) {
+        if (profile == null) return
+        request.addOption("--user-agent", profile.userAgent)
+        request.addOption("--referer", profile.referer)
+        request.addOption("--add-header", "Accept-Language:pt-BR,pt;q=0.9,en;q=0.8")
+    }
+
+    private fun isFacebookUrl(url: String): Boolean {
+        val host = runCatching { Uri.parse(url).host.orEmpty().lowercase(Locale.ROOT) }.getOrDefault("")
+        return host == "facebook.com" || host.endsWith(".facebook.com") || host == "fb.watch"
+    }
+
     private fun isYouTubeUrl(url: String): Boolean {
         val host = runCatching { Uri.parse(url).host.orEmpty().lowercase(Locale.ROOT) }.getOrDefault("")
         return host == "youtu.be" ||
@@ -924,6 +1089,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val message = error.message.orEmpty().lowercase(Locale.ROOT)
         return message.contains("403") ||
             message.contains("forbidden") ||
+            message.contains("cannot parse data") ||
+            message.contains("unable to extract") ||
+            message.contains("unsupported url") ||
             message.contains("requested format is not available") ||
             message.contains("unable to download video data") ||
             message.contains("fragment") ||
@@ -944,6 +1112,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 "Esse conteúdo parece exigir login, cookies ou permissão privada. Use um link público e acessível sem conta."
             raw.contains("403", ignoreCase = true) || raw.contains("Forbidden", ignoreCase = true) ->
                 "A plataforma recusou a rota de download (erro 403). O GetMuvi já tentou uma rota alternativa quando disponível. Tente novamente em alguns instantes."
+            raw.contains("Cannot parse data", ignoreCase = true) || raw.contains("Unable to extract", ignoreCase = true) ->
+                "O Facebook não entregou dados públicos utilizáveis para este vídeo. O GetMuvi tentou os endereços público, móvel e canônico, sem exigir login. Confirme se a publicação está visível para qualquer pessoa."
             raw.contains("Requested format is not available", ignoreCase = true) ->
                 "Esse formato não está disponível para este link. Escolha outra qualidade ou formato."
             raw.isNotBlank() -> raw
