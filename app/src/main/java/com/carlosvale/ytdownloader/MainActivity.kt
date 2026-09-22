@@ -87,6 +87,8 @@ import org.json.JSONObject
 import java.io.File
 import java.util.Locale
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
+import androidx.compose.ui.text.AnnotatedString
 import kotlin.math.abs
 
 class MainActivity : ComponentActivity() {
@@ -151,6 +153,7 @@ data class UiState(
     val status: String = "",
     val media: MediaSummary? = null,
     val error: String? = null,
+    val diagnostic: String = "",
     val successMessage: String? = null,
     val customFolder: Uri? = null,
     val completedItems: Int = 0,
@@ -187,6 +190,7 @@ private data class FormatDescriptor(
 private const val PROGRESS_UI_INTERVAL_MS = 250L
 private const val PROGRESS_UI_DELTA = 0.01f
 private const val FINAL_PATH_MARKER = "__GETMUVI_FINAL__"
+private const val YOUTUBE_CLIENTS = "default,web_embedded,tv_downgraded"
 private val STATUS_WHITESPACE = Regex("\\s+")
 private val FACEBOOK_VIDEO_ID_PATTERNS = listOf(
     Regex("(?i)(?:facebook:|videos/|video_id[=/:]|[?&]v=)(\\d{8,})"),
@@ -207,6 +211,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
     private var processId: String? = null
+    private val busy = AtomicBoolean(false)
+    private var analyzedUrl: String? = null
+    private val diagnostics = ArrayDeque<String>()
+
+    private fun note(stage: String, error: Throwable? = null) {
+        if (diagnostics.size == 8) diagnostics.removeFirst()
+        diagnostics.addLast("$stage: ${error?.let(DownloadErrors::code) ?: "OK"}")
+    }
+
+    private fun report(): String = "GetMuvi 0.3.9 | Android ${android.os.Build.VERSION.SDK_INT}\n" + diagnostics.joinToString("\n")
 
     @Volatile
     private var cancelRequested = false
@@ -222,16 +236,23 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun analyze(url: String) {
+        if (busy.get()) return
         val cleanUrl = url.trim()
         if (!cleanUrl.startsWith("http://") && !cleanUrl.startsWith("https://")) {
             _state.value = _state.value.copy(error = "Cole um link válido.", successMessage = null)
             return
         }
 
+        if (!busy.compareAndSet(false, true)) return
+        cancelRequested = false
+        analyzedUrl = null
+        diagnostics.clear()
         viewModelScope.launch(Dispatchers.IO) {
+            try {
             _state.value = _state.value.copy(
                 analyzing = true,
                 error = null,
+                diagnostic = "",
                 successMessage = null,
                 media = null,
                 status = "Atualizando mecanismo…"
@@ -275,11 +296,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     status = "Pronto para baixar"
                 )
             }.onFailure { error ->
+                note("resultado da análise", error)
                 _state.value = _state.value.copy(
                     analyzing = false,
-                    error = friendlyError(error),
+                    error = DownloadErrors.message(error),
+                    diagnostic = report(),
                     status = ""
                 )
+            }
+            } finally {
+                processId = null
+                busy.set(false)
             }
         }
     }
@@ -289,7 +316,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         var finalError: Throwable? = null
         var routeIndex = 0
 
-        while (routeIndex < routes.size) {
+        while (routeIndex < routes.size && routeIndex < 6) {
             val route = routes[routeIndex++]
             if (routeIndex > 1) {
                 _state.value = _state.value.copy(status = "Tentando ${route.label}…")
@@ -306,17 +333,28 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 if (isYouTubeUrl(route.url)) {
                     request.addOption(
                         "--extractor-args",
-                        "youtube:player_client=default,web_embedded,tv_downgraded"
+                        "youtube:player_client=$YOUTUBE_CLIENTS"
                     )
                 }
                 addBrowserProfile(request, route.browserProfile)
-                YoutubeDL.getInstance().execute(request).out.trim()
+                request.addOption("--socket-timeout", "15")
+                    .addOption("--retries", "1")
+                    .addOption("--extractor-retries", "1")
+                val id = UUID.randomUUID().toString()
+                processId = id
+                YoutubeDL.getInstance().execute(request, id).out.trim()
             }
 
-            if (result.isSuccess) return result.getOrThrow()
+            if (result.isSuccess) {
+                analyzedUrl = url
+                note("análise ${routeIndex}")
+                return result.getOrThrow()
+            }
 
             val error = result.exceptionOrNull() ?: RuntimeException("Falha ao analisar a mídia")
             finalError = error
+            note("análise ${routeIndex}", error)
+            if (DownloadErrors.code(error) in setOf("RATE_LIMIT", "AUTH_REQUIRED", "CONTENT_REMOVED")) break
             if (isFacebookUrl(url)) {
                 val videoId = extractFacebookVideoId(error.message.orEmpty())
                 if (videoId != null) {
@@ -530,9 +568,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     )
 
     fun download(url: String, option: DownloadOption) {
-        if (_state.value.downloading) return
         val cleanUrl = url.trim()
         if (cleanUrl.isBlank()) return
+        if (busy.get()) return
+        if (analyzedUrl != cleanUrl || _state.value.media == null) {
+            _state.value = _state.value.copy(error = "O link mudou. Analise novamente antes de baixar.")
+            return
+        }
+        if (!busy.compareAndSet(false, true)) return
+        cancelRequested = false
 
         val app = getApplication<YTDownloaderApp>()
         val media = _state.value.media
@@ -541,19 +585,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val totalItems = if (isPlaylist) playlistEntries.size else 1
 
         viewModelScope.launch(Dispatchers.IO) {
-            cancelRequested = false
             val customTree = _state.value.customFolder
             val jobDir = if (customTree == null) {
-                File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "GetMuvi")
+                File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "GetMuvi/.job-${UUID.randomUUID()}")
             } else {
                 File(app.cacheDir, "export-${System.currentTimeMillis()}")
             }
 
-            jobDir.mkdirs()
             _state.value = _state.value.copy(
                 downloading = true,
                 progress = 0f,
                 error = null,
+                diagnostic = "",
                 successMessage = null,
                 status = "Atualizando mecanismo…",
                 completedItems = 0,
@@ -562,6 +605,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             )
 
             try {
+                check(jobDir.mkdirs() || jobDir.isDirectory) { "Não foi possível criar pasta temporária" }
                 app.ensureDownloaderReady()
                 if (
                     option.type == DownloadType.BEST_AV ||
@@ -590,10 +634,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         )
 
                         val outputTemplate = "${itemNumber.toString().padStart(itemNumberWidth, '0')} - %(title).42s.%(ext)s"
+                        val itemDir = File(jobDir, itemNumber.toString())
+                        check(itemDir.mkdirs()) { "Não foi possível criar pasta temporária" }
                         val result = executeWithFallback(
                             url = entry.url,
                             option = option,
-                            outputDir = jobDir,
+                            outputDir = itemDir,
                             outputTemplate = outputTemplate,
                             completedBeforeThisItem = completed,
                             totalItems = totalItems,
@@ -612,6 +658,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                             )
                         } else {
                             failed++
+                            itemDir.deleteRecursively()
                             lastError = result.exceptionOrNull()
                             _state.value = _state.value.copy(
                                 status = "Não foi possível baixar o item $itemNumber. Continuando…"
@@ -644,7 +691,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 if (customTree != null) {
                     _state.value = _state.value.copy(status = "Salvando na pasta escolhida…")
                     exportToTree(app, jobDir, customTree)
-                    jobDir.deleteRecursively()
+                } else {
+                    val destination = jobDir.parentFile!!
+                    jobDir.walkTopDown().filter(::isExportableMediaFile).forEach { file ->
+                        if (cancelRequested) error("Download cancelado")
+                        var target = File(destination, file.name)
+                        var suffix = 1
+                        while (target.exists()) {
+                            target = File(destination, "${file.nameWithoutExtension} (${suffix++}).${file.extension}")
+                        }
+                        check(file.renameTo(target)) { "Não foi possível salvar arquivo na pasta Downloads" }
+                    }
                 }
 
                 val message = when {
@@ -655,6 +712,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
                 _state.value = UiState(
                     successMessage = message,
+                    diagnostic = if (failed > 0) report() else "",
                     customFolder = customTree,
                     resetToken = _state.value.resetToken + 1
                 )
@@ -662,22 +720,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 if (!cancelRequested) {
                     _state.value = _state.value.copy(
                         downloading = false,
-                        error = friendlyError(error),
+                        error = DownloadErrors.message(error),
+                        diagnostic = report() + "\nfinalização: " + DownloadErrors.code(error),
                         status = ""
                     )
                 }
             } finally {
                 processId = null
                 cancelRequested = false
-                if (customTree != null) {
-                    runCatching { jobDir.deleteRecursively() }
-                } else {
-                    jobDir.listFiles()?.forEach { file ->
-                        if (file.name.endsWith(".part") || file.name.endsWith(".ytdl")) {
-                            file.delete()
-                        }
-                    }
-                }
+                runCatching { jobDir.deleteRecursively() }
+                busy.set(false)
             }
         }
     }
@@ -694,7 +746,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     ): Result<Unit> {
         val attempts = (if (isYouTubeUrl(url)) {
             listOf(
-                DownloadAttempt("rota padrão"),
+                DownloadAttempt("mesma configuração da análise", playerClients = YOUTUBE_CLIENTS),
+                DownloadAttempt("configuração padrão do mecanismo"),
                 DownloadAttempt(
                     label = "rota alternativa",
                     playerClients = "web_embedded,tv_downgraded"
@@ -722,23 +775,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                             browserProfile = route.browserProfile
                         )
                     )
-                    add(
-                        DownloadAttempt(
-                            label = "${route.label} em modo compatibilidade",
-                            compatibilityMode = true,
-                            requestUrl = route.url,
-                            browserProfile = route.browserProfile
-                        )
-                    )
                 }
-                add(
-                    DownloadAttempt(
-                        label = "nome seguro",
-                        compatibilityMode = true,
-                        restrictFilenames = true,
-                        browserProfile = FACEBOOK_MOBILE_PROFILE
-                    )
-                )
             }
         } else {
             listOf(
@@ -758,7 +795,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         var finalError: Throwable? = null
 
         var attemptIndex = 0
-        while (attemptIndex < attempts.size) {
+        while (attemptIndex < attempts.size && attemptIndex < 6) {
             val attempt = attempts[attemptIndex]
             if (cancelRequested || !_state.value.downloading) {
                 return Result.failure(RuntimeException("Download cancelado"))
@@ -842,24 +879,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 if (reportedFile != null && reportedFile.isFile && reportedFile.length() > 0L) {
                     val realSource = reportedFile.canonicalFile
                     val realOutputDir = outputDir.canonicalFile
-                    if (!realSource.toPath().startsWith(realOutputDir.toPath())) {
-                        val rescued = File(outputDir, realSource.name)
-                        realSource.copyTo(rescued, overwrite = true)
-                        if (!rescued.isFile || rescued.length() != realSource.length()) {
-                            error("O arquivo final foi localizado, mas não pôde ser movido para a área temporária do GetMuvi.")
-                        }
-                    }
+                    check(realSource.toPath().startsWith(realOutputDir.toPath())) { "O arquivo final saiu da pasta temporária esperada." }
                 }
 
                 val templatePrefix = outputTemplate.substringBefore("%(").takeIf { it.isNotBlank() }
-                val finalFiles = outputDir.walkTopDown()
-                    .filter { file ->
+                val hasFinalFile = outputDir.walkTopDown()
+                    .any { file ->
                         isExportableMediaFile(file) &&
                             (templatePrefix == null || file.name.startsWith(templatePrefix))
                     }
-                    .toList()
 
-                if (finalFiles.isEmpty()) {
+                if (!hasFinalFile) {
                     error("O mecanismo concluiu o processo, mas não entregou um arquivo de mídia final ao GetMuvi.")
                 }
                 Unit
@@ -867,22 +897,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
             processId = null
 
-            if (result.isSuccess) return result
+            if (result.isSuccess) {
+                note("download ${attemptIndex + 1}")
+                return result
+            }
 
             val error = result.exceptionOrNull() ?: RuntimeException("Falha no download")
             finalError = error
+            note("download ${attemptIndex + 1}", error)
             if (isFacebookUrl(url)) {
                 extractFacebookVideoId(error.message.orEmpty())?.let { videoId ->
                     facebookCanonicalRoutes(videoId).forEach { route ->
                         if (attempts.none { it.requestUrl == route.url }) {
                             attempts += DownloadAttempt(
                                 label = route.label,
-                                requestUrl = route.url,
-                                browserProfile = route.browserProfile
-                            )
-                            attempts += DownloadAttempt(
-                                label = "${route.label} em modo compatibilidade",
-                                compatibilityMode = true,
                                 requestUrl = route.url,
                                 browserProfile = route.browserProfile
                             )
@@ -910,14 +938,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val request = YoutubeDLRequest(url)
             .addOption("--paths", "home:${outputDir.absolutePath}")
             .addOption("--paths", "temp:${outputDir.absolutePath}")
-            .addOption("-o", outputTemplate)
+            .addOption("-o", File(outputDir, outputTemplate).absolutePath)
             .addOption("--print", "after_move:$FINAL_PATH_MARKER%(filepath)s")
+            .addOption("--no-simulate")
+            .addOption("--socket-timeout", "15")
+            .addOption("--extractor-retries", "1")
             .addOption("--trim-filenames", "64")
             .addOption("--no-warnings")
             .addOption("--newline")
             .addOption("--no-playlist")
-            .addOption("--retries", "3")
-            .addOption("--fragment-retries", "3")
+            .addOption("--retries", "1")
+            .addOption("--fragment-retries", "1")
 
         if (restrictFilenames) request.addOption("--restrict-filenames")
         if (playerClients != null) request.addOption("--extractor-args", "youtube:player_client=$playerClients")
@@ -1086,8 +1117,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun isRetryableDownloadError(error: Throwable): Boolean {
+        if (DownloadErrors.code(error) in setOf("AUTH_REQUIRED", "RATE_LIMIT", "CONTENT_REMOVED", "STORAGE_FULL", "SAVE_FAILED", "CANCELLED")) return false
         val message = error.message.orEmpty().lowercase(Locale.ROOT)
-        return message.contains("403") ||
+        return message.contains("this video is unavailable") || message.contains("403") ||
             message.contains("forbidden") ||
             message.contains("cannot parse data") ||
             message.contains("unable to extract") ||
@@ -1103,24 +1135,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             message.contains("unable to open for writing")
     }
 
-    private fun friendlyError(error: Throwable): String {
-        val raw = error.message.orEmpty()
-        return when {
-            raw.contains("File name too long", ignoreCase = true) || raw.contains("Errno 36", ignoreCase = true) ->
-                "A plataforma gerou um nome de arquivo incompatível com o Android. O GetMuvi tentou também um nome seguro, mas essa mídia ainda não pôde ser salva."
-            raw.contains("login", ignoreCase = true) || raw.contains("cookies", ignoreCase = true) || raw.contains("private", ignoreCase = true) ->
-                "Esse conteúdo parece exigir login, cookies ou permissão privada. Use um link público e acessível sem conta."
-            raw.contains("403", ignoreCase = true) || raw.contains("Forbidden", ignoreCase = true) ->
-                "A plataforma recusou a rota de download (erro 403). O GetMuvi já tentou uma rota alternativa quando disponível. Tente novamente em alguns instantes."
-            raw.contains("Cannot parse data", ignoreCase = true) || raw.contains("Unable to extract", ignoreCase = true) ->
-                "O Facebook não entregou dados públicos utilizáveis para este vídeo. O GetMuvi tentou os endereços público, móvel e canônico, sem exigir login. Confirme se a publicação está visível para qualquer pessoa."
-            raw.contains("Requested format is not available", ignoreCase = true) ->
-                "Esse formato não está disponível para este link. Escolha outra qualidade ou formato."
-            raw.isNotBlank() -> raw
-            else -> "Não foi possível concluir o download."
-        }
-    }
-
     private fun isExportableMediaFile(file: File): Boolean {
         if (!file.isFile || file.length() <= 0L) return false
 
@@ -1132,8 +1146,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             Regex("""\.f\d+\.[^.]+$""").containsMatchIn(lowerName)
         ) return false
 
-        return file.extension.lowercase(Locale.ROOT) !in setOf(
-            "json", "description", "jpg", "jpeg", "png", "webp", "vtt", "srt", "ass"
+        return file.extension.lowercase(Locale.ROOT) in setOf(
+            "mp4", "mkv", "webm", "mov", "flv", "avi", "3gp", "ts", "m4v",
+            "mp3", "m4a", "aac", "opus", "ogg", "oga", "wav", "flac"
         )
     }
 
@@ -1170,29 +1185,47 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         var lastError: Throwable? = null
 
         for (attempt in 1..2) {
+            var target: DocumentFile? = null
             try {
-                root.findFile(file.name)?.delete()
-                val target = root.createFile(mime, file.name)
+                if (cancelRequested) error("Download cancelado")
+                var name = file.name
+                var suffix = 1
+                while (root.findFile(name) != null) name = "${file.nameWithoutExtension} (${suffix++}).${file.extension}"
+                val created = root.createFile(mime, name)
                     ?: error("Não foi possível criar ${file.name}")
+                target = created
 
-                val copiedBytes = context.contentResolver.openOutputStream(target.uri, "w")?.use { output ->
-                    file.inputStream().use { input -> input.copyTo(output) }
+                val copiedBytes = context.contentResolver.openOutputStream(created.uri, "w")?.use { output ->
+                    file.inputStream().use { input ->
+                        val buffer = ByteArray(64 * 1024)
+                        var total = 0L
+                        while (true) {
+                            if (cancelRequested) error("Download cancelado")
+                            val count = input.read(buffer)
+                            if (count < 0) break
+                            output.write(buffer, 0, count)
+                            total += count
+                        }
+                        total
+                    }
                 } ?: error("Não foi possível gravar ${file.name}")
 
                 if (copiedBytes != expectedBytes) {
-                    target.delete()
+                    created.delete()
                     error("A cópia de ${file.name} ficou incompleta ($copiedBytes de $expectedBytes bytes).")
                 }
 
-                val savedBytes = target.length()
+                val savedBytes = created.length()
                 if (savedBytes > 0L && savedBytes != expectedBytes) {
-                    target.delete()
+                    created.delete()
                     error("A verificação de ${file.name} falhou após a cópia.")
                 }
 
                 copied = true
                 break
             } catch (error: Throwable) {
+                target?.delete()
+                if (cancelRequested) throw error
                 lastError = error
                 if (attempt < 2) Thread.sleep(250)
             }
@@ -1383,6 +1416,14 @@ fun DownloaderScreen(initialUrl: String, vm: MainViewModel = viewModel()) {
                             modifier = Modifier.padding(14.dp),
                             color = MaterialTheme.colorScheme.onErrorContainer
                         )
+                    }
+                }
+            }
+
+            if (state.diagnostic.isNotBlank()) {
+                item {
+                    OutlinedButton(onClick = { clipboard.setText(AnnotatedString(state.diagnostic)) }) {
+                        Text("Copiar diagnóstico")
                     }
                 }
             }

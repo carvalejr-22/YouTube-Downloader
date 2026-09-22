@@ -39,7 +39,7 @@ jobs:
       - name: Upload arm64 test APK
         uses: actions/upload-artifact@v4
         with:
-          name: GetMuvi-0.3.8-arm64-v8a-debug
+          name: GetMuvi-0.3.9-arm64-v8a-debug
           path: app/build/outputs/apk/debug/app-arm64-v8a-debug.apk
           if-no-files-found: error
 
@@ -80,20 +80,20 @@ jobs:
         if: steps.signing.outputs.ready == 'true'
         shell: bash
         run: |
-          cp app/build/outputs/apk/release/app-arm64-v8a-release.apk GetMuvi-0.3.8-arm64-v8a.apk
-          cp app/build/outputs/apk/release/app-universal-release.apk GetMuvi-0.3.8-universal.apk
-          cp app/build/outputs/bundle/release/app-release.aab GetMuvi-0.3.8.aab
-          sha256sum GetMuvi-0.3.8-arm64-v8a.apk GetMuvi-0.3.8-universal.apk GetMuvi-0.3.8.aab > SHA256SUMS.txt
+          cp app/build/outputs/apk/release/app-arm64-v8a-release.apk GetMuvi-0.3.9-arm64-v8a.apk
+          cp app/build/outputs/apk/release/app-universal-release.apk GetMuvi-0.3.9-universal.apk
+          cp app/build/outputs/bundle/release/app-release.aab GetMuvi-0.3.9.aab
+          sha256sum GetMuvi-0.3.9-arm64-v8a.apk GetMuvi-0.3.9-universal.apk GetMuvi-0.3.9.aab > SHA256SUMS.txt
 
       - name: Upload signed release artifacts
         if: steps.signing.outputs.ready == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: GetMuvi-0.3.8-signed-release
+          name: GetMuvi-0.3.9-signed-release
           path: |
-            GetMuvi-0.3.8-arm64-v8a.apk
-            GetMuvi-0.3.8-universal.apk
-            GetMuvi-0.3.8.aab
+            GetMuvi-0.3.9-arm64-v8a.apk
+            GetMuvi-0.3.9-universal.apk
+            GetMuvi-0.3.9.aab
             SHA256SUMS.txt
           if-no-files-found: error
 
@@ -103,14 +103,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view v0.3.8 >/dev/null 2>&1; then
-            gh release upload v0.3.8 GetMuvi-0.3.8-arm64-v8a.apk GetMuvi-0.3.8-universal.apk GetMuvi-0.3.8.aab SHA256SUMS.txt --clobber
+          if gh release view v0.3.9 >/dev/null 2>&1; then
+            gh release upload v0.3.9 GetMuvi-0.3.9-arm64-v8a.apk GetMuvi-0.3.9-universal.apk GetMuvi-0.3.9.aab SHA256SUMS.txt --clobber
           else
-            gh release create v0.3.8 \
-              GetMuvi-0.3.8-arm64-v8a.apk \
-              GetMuvi-0.3.8-universal.apk \
-              GetMuvi-0.3.8.aab \
+            gh release create v0.3.9 \
+              GetMuvi-0.3.9-arm64-v8a.apk \
+              GetMuvi-0.3.9-universal.apk \
+              GetMuvi-0.3.9.aab \
               SHA256SUMS.txt \
-              --title "GetMuvi 0.3.8" \
+              --title "GetMuvi 0.3.9" \
               --notes "Adiciona rotas públicas alternativas para vídeos do Facebook, incluindo endereços móvel, básico e canônico, sem exigir autenticação."
           fi
