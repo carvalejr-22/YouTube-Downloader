@@ -22,8 +22,8 @@ android {
         applicationId = "com.carlosvale.ytdownloader"
         minSdk = 26
         targetSdk = 36
-        versionCode = 14
-        versionName = "0.3.8"
+        versionCode = 15
+        versionName = "0.3.9"
     }
 
     buildFeatures {
@@ -92,6 +92,7 @@ android {
 }
 
 dependencies {
+    testImplementation("junit:junit:4.13.2")
     val composeBom = platform("androidx.compose:compose-bom:2026.08.00")
     implementation(composeBom)
 

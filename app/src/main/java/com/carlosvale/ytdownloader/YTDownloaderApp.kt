@@ -30,6 +30,10 @@ class YTDownloaderApp : Application() {
                 runCatching { dir.deleteRecursively() }
                     .onFailure { Log.w(TAG, "Não foi possível limpar temporário antigo: ${dir.name}", it) }
             }
+        val downloads = java.io.File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS), "GetMuvi")
+        downloads.listFiles()?.filter {
+            it.isDirectory && it.name.startsWith(".job-") && it.lastModified() < cutoff
+        }?.forEach { runCatching { it.deleteRecursively() } }
     }
     private val updateMutex = Mutex()
 
