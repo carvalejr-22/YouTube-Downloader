@@ -1,11 +1,13 @@
 package com.carlosvale.ytdownloader
 
 import android.app.Application
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Environment
 import android.os.SystemClock
+import android.provider.MediaStore
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.enableEdgeToEdge
@@ -220,7 +222,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         diagnostics.addLast("$stage: ${error?.let(DownloadErrors::code) ?: "OK"}")
     }
 
-    private fun report(): String = "GetMuvi 0.3.9 | Android ${android.os.Build.VERSION.SDK_INT}\n" + diagnostics.joinToString("\n")
+    private fun report(): String = "GetMuvi 0.3.10 | Android ${android.os.Build.VERSION.SDK_INT}\n" + diagnostics.joinToString("\n")
 
     @Volatile
     private var cancelRequested = false
@@ -586,11 +588,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
         viewModelScope.launch(Dispatchers.IO) {
             val customTree = _state.value.customFolder
-            val jobDir = if (customTree == null) {
-                File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "GetMuvi/.job-${UUID.randomUUID()}")
-            } else {
-                File(app.cacheDir, "export-${System.currentTimeMillis()}")
-            }
+            // Android 10+ blocks direct writes to arbitrary shared-storage paths.
+            // Always download into the app's private cache first; export only after
+            // yt-dlp/FFmpeg has produced a complete file.
+            val jobDir = File(app.cacheDir, "download-${UUID.randomUUID()}")
 
             _state.value = _state.value.copy(
                 downloading = true,
@@ -692,17 +693,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     _state.value = _state.value.copy(status = "Salvando na pasta escolhida…")
                     exportToTree(app, jobDir, customTree)
                 } else {
-                    val destination = jobDir.parentFile!!
-                    jobDir.walkTopDown().filter(::isExportableMediaFile).forEach { file ->
-                        if (cancelRequested) error("Download cancelado")
-                        var target = File(destination, file.name)
-                        var suffix = 1
-                        while (target.exists()) {
-                            target = File(destination, "${file.nameWithoutExtension} (${suffix++}).${file.extension}")
-                        }
-                        check(file.renameTo(target)) { "Não foi possível salvar arquivo na pasta Downloads" }
-                    }
+                    _state.value = _state.value.copy(status = "Salvando em Downloads/GetMuvi…")
+                    exportToDownloads(app, jobDir)
                 }
+                note("salvamento")
 
                 val message = when {
                     isPlaylist && failed == 0 -> "Lista concluída: $completed de $totalItems itens baixados com sucesso."
@@ -1152,6 +1146,109 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         )
     }
 
+    private fun mediaMimeType(file: File): String = when (file.extension.lowercase(Locale.ROOT)) {
+        "mp3" -> "audio/mpeg"
+        "m4a" -> "audio/mp4"
+        "aac" -> "audio/aac"
+        "opus" -> "audio/opus"
+        "ogg", "oga" -> "audio/ogg"
+        "wav" -> "audio/wav"
+        "flac" -> "audio/flac"
+        "webm" -> if (file.name.contains("audio", ignoreCase = true)) "audio/webm" else "video/webm"
+        "mkv" -> "video/x-matroska"
+        "mov" -> "video/quicktime"
+        "3gp" -> "video/3gpp"
+        "ts" -> "video/mp2t"
+        else -> "video/mp4"
+    }
+
+    private fun exportToDownloads(context: Context, source: File) {
+        val files = source.walkTopDown().filter(::isExportableMediaFile).toList()
+        if (files.isEmpty()) {
+            error("O download terminou, mas o arquivo final não foi encontrado para salvar.")
+        }
+
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            val resolver = context.contentResolver
+            files.forEach { file ->
+                if (cancelRequested) error("Download cancelado")
+                val expectedBytes = file.length()
+                if (expectedBytes <= 0L) error("O arquivo ${file.name} foi gerado vazio e não será salvo.")
+
+                val values = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, file.name)
+                    put(MediaStore.MediaColumns.MIME_TYPE, mediaMimeType(file))
+                    put(
+                        MediaStore.MediaColumns.RELATIVE_PATH,
+                        "${Environment.DIRECTORY_DOWNLOADS}/GetMuvi"
+                    )
+                    put(MediaStore.MediaColumns.IS_PENDING, 1)
+                }
+
+                var targetUri: Uri? = null
+                try {
+                    targetUri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                        ?: error("Não foi possível criar o arquivo em Downloads/GetMuvi")
+
+                    val copiedBytes = resolver.openOutputStream(targetUri, "w")?.use { output ->
+                        file.inputStream().use { input ->
+                            val buffer = ByteArray(64 * 1024)
+                            var total = 0L
+                            while (true) {
+                                if (cancelRequested) error("Download cancelado")
+                                val count = input.read(buffer)
+                                if (count < 0) break
+                                output.write(buffer, 0, count)
+                                total += count
+                            }
+                            output.flush()
+                            total
+                        }
+                    } ?: error("Não foi possível gravar ${file.name} em Downloads/GetMuvi")
+
+                    if (copiedBytes != expectedBytes) {
+                        error("A cópia de ${file.name} ficou incompleta ($copiedBytes de $expectedBytes bytes).")
+                    }
+
+                    val publish = ContentValues().apply {
+                        put(MediaStore.MediaColumns.IS_PENDING, 0)
+                    }
+                    resolver.update(targetUri, publish, null, null)
+                } catch (error: Throwable) {
+                    targetUri?.let { runCatching { resolver.delete(it, null, null) } }
+                    if (cancelRequested) throw error
+                    throw IllegalStateException(
+                        "Não foi possível salvar ${file.name} em Downloads/GetMuvi.",
+                        error
+                    )
+                }
+            }
+            return
+        }
+
+        @Suppress("DEPRECATION")
+        val destination = File(
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+            "GetMuvi"
+        )
+        check(destination.mkdirs() || destination.isDirectory) {
+            "Não foi possível criar a pasta Downloads/GetMuvi"
+        }
+
+        files.forEach { file ->
+            if (cancelRequested) error("Download cancelado")
+            var target = File(destination, file.name)
+            var suffix = 1
+            while (target.exists()) {
+                target = File(destination, "${file.nameWithoutExtension} (${suffix++}).${file.extension}")
+            }
+            file.copyTo(target, overwrite = false)
+            check(target.isFile && target.length() == file.length()) {
+                "Não foi possível salvar ${file.name} em Downloads/GetMuvi"
+            }
+        }
+    }
+
     private fun exportToTree(context: Context, source: File, treeUri: Uri) {
     val root = DocumentFile.fromTreeUri(context, treeUri)
         ?: error("Pasta selecionada indisponível")
@@ -1170,16 +1267,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             error("O arquivo ${file.name} foi gerado vazio e não será salvo.")
         }
 
-        val mime = when (file.extension.lowercase(Locale.ROOT)) {
-            "mp3" -> "audio/mpeg"
-            "m4a" -> "audio/mp4"
-            "aac" -> "audio/aac"
-            "opus" -> "audio/opus"
-            "ogg" -> "audio/ogg"
-            "webm" -> if (file.name.contains("audio", ignoreCase = true)) "audio/webm" else "video/webm"
-            "mkv" -> "video/x-matroska"
-            else -> "video/mp4"
-        }
+        val mime = mediaMimeType(file)
 
         var copied = false
         var lastError: Throwable? = null
